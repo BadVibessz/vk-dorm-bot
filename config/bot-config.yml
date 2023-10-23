@@ -1,0 +1,14 @@
+rooms:
+  - room:
+      number: 393
+      members:
+        - { name: Данил, id: rooccat }
+        - { name: Максим, id: maxim.zaytsev2013 }
+
+  - room:
+      number: 393
+      members:
+        - { name: Олег, id: id324195597 }
+        - { name: Рамзан, id: id266736469 }
+        - { name: Никита, id: id171920587 }
+

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"vk-bot/config"
 )
 
 func PrettyString(str string) (string, error) {
@@ -44,6 +45,14 @@ func loadEnv() {
 func main() {
 
 	logger := log.New(os.Stderr, "", 3)
+
+	config, err := config.Load("../config/bot-config.yml")
+	if err != nil {
+		logger.Println("VK_API_TOKEN not specified in env")
+		os.Exit(1)
+	}
+
+	println(config.Rooms)
 
 	loadEnv()
 
