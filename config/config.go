@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
 )
@@ -17,26 +16,21 @@ type Room struct {
 }
 
 type Config struct {
-	Rooms []Room `yaml:"rooms"`
+	Rooms     []Room   `yaml:"rooms"`
+	Timings   []string `yaml:"timings"`
+	Frequency int8     `yaml:"frequency"`
+	Current   string   `yaml:"current"`
 }
 
 func Load(path string) (Config, error) {
 
-	f, err := os.Open(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
 	}
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			// todo:
-			fmt.Println(err)
-		}
-	}(f)
 
 	var cfg Config
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(&cfg)
+	err = yaml.Unmarshal(content, &cfg)
 	if err != nil {
 		// todo:
 		return Config{}, err

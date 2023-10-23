@@ -1,14 +1,20 @@
 rooms:
-  - room:
-      number: 393
+    - number: "393"
       members:
-        - { name: Данил, id: rooccat }
-        - { name: Максим, id: maxim.zaytsev2013 }
-
-  - room:
-      number: 393
+        - name: Данил
+          id: rooccat
+        - name: Максим
+          id: maxim.zaytsev2013
+    - number: "395"
       members:
-        - { name: Олег, id: id324195597 }
-        - { name: Рамзан, id: id266736469 }
-        - { name: Никита, id: id171920587 }
-
+        - name: Олег
+          id: id324195597
+        - name: Рамзан
+          id: id266736469
+        - name: Никита
+          id: id171920587
+timings:
+    - "7:30"
+    - "19:30"
+frequency: 2
+current: "395"
