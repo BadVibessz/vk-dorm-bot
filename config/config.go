@@ -23,18 +23,37 @@ type Config struct {
 	Current   string   `yaml:"current"`
 }
 
-func Load(path string) (Config, error) {
+func Load(path string) (*Config, error) {
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		return &Config{}, err
 	}
 
 	var cfg Config
 	err = yaml.Unmarshal(content, &cfg)
 	if err != nil {
 		// todo:
-		return Config{}, err
+		return &Config{}, err
 	}
-	return cfg, nil
+	return &cfg, nil
+}
+
+func (c *Config) Save(path string) error {
+
+	serialized, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(serialized)
+	if err != nil {
+		return err
+	}
+	return nil
 }
