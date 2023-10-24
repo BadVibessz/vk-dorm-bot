@@ -35,14 +35,14 @@ type BotService struct {
 
 func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
 
-	confg, err := config.Load(configPath)
+	conf, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
 	}
 
 	return &BotService{
 		ConfigPath: configPath,
-		Conf:       confg,
+		Conf:       conf,
 		VK:         vk,
 	}, nil
 }

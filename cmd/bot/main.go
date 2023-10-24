@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	vkapi "github.com/BadVibessz/vk-api"
 	"github.com/joho/godotenv"
@@ -19,13 +17,13 @@ const (
 	configPath = "config/bot-config.yml"
 )
 
-func PrettyString(str string) (string, error) {
-	var prettyJSON bytes.Buffer
-	if err := json.Indent(&prettyJSON, []byte(str), "", "    "); err != nil {
-		return "", err
-	}
-	return prettyJSON.String(), nil
-}
+var (
+	token    string
+	endpoint string
+	version  string
+
+	vk vkapi.VkAPI
+)
 
 func loadEnv() {
 	if err := godotenv.Load(); err != nil {
@@ -34,33 +32,21 @@ func loadEnv() {
 	}
 }
 
-//func moscowToUtc(h, m int8) (string, error) {
-//	// todo: return err if args is incorrect
-//
-//	// todo:
-//	h -= 3
-//	return "h"
-//
-//}
+func initVars(logger *log.Logger) {
 
-func main() {
+	var exists bool
 
-	loadEnv()
-
-	logger := log.New(os.Stderr, "", 3)
-
-	// todo: encapsulate
-	token, exists := os.LookupEnv("VK_API_TOKEN")
+	token, exists = os.LookupEnv("VK_API_TOKEN")
 	if !exists {
 		apputils.HandleFatalError(errors.New("VK_API_TOKEN not specified in env"), logger)
 	}
 
-	endpoint, exists := os.LookupEnv("VK_ENDPOINT")
+	endpoint, exists = os.LookupEnv("VK_ENDPOINT")
 	if !exists {
 		apputils.HandleFatalError(errors.New("VK_ENDPOINT not specified in env"), logger)
 	}
 
-	version, exists := os.LookupEnv("VK_API_VERSION")
+	version, exists = os.LookupEnv("VK_API_VERSION")
 	if !exists {
 		apputils.HandleFatalError(errors.New("VK_API_VERSION not specified in env"), logger)
 	}
@@ -72,13 +58,20 @@ func main() {
 		Retry:      false,
 		RetryCount: 0}
 
-	ctx := context.Background()
-
-	vk := vkapi.VkAPI{
+	vk = vkapi.VkAPI{
 		Token:   token,
 		Version: version,
 		Client:  &client,
 	}
+
+}
+
+func main() {
+
+	logger := log.New(os.Stderr, "", 3)
+
+	loadEnv()
+	initVars(logger)
 
 	bot, err := app.NewBot(&vk, configPath)
 	if err != nil {
@@ -86,9 +79,10 @@ func main() {
 	}
 
 	wg := sync.WaitGroup{}
+	ctx := context.Background()
 
 	bot.StartAsync(ctx, &wg, logger)
 
 	wg.Wait()
-
+	println("App finished")
 }
