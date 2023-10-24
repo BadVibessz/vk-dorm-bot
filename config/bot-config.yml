@@ -1,10 +1,30 @@
 rooms:
+    - number: "391"
+      members:
+        - name: Джавид
+          id: id819522445
+        - name: Сердар
+          id: id818959495
+    - number: "392"
+      members:
+        - name: Таня
+          id: id316332619
+        - name: Луиза
+          id: luliza
     - number: "393"
       members:
-        - name: Данил
+        - name: О'Брайен
           id: rooccat
         - name: Максим
           id: maxim.zaytsev2013
+    - number: "394"
+      members:
+        - name: Наиль
+          id: paranoiax9
+        - name: Дамир
+          id: ito_ya
+        - name: Данил
+          id: khamzd
     - number: "395"
       members:
         - name: Олег
@@ -13,6 +33,26 @@ rooms:
           id: id266736469
         - name: Никита
           id: id171920587
+    - number: "396"
+      members:
+        - name: Настя
+          id: nastyfedorova03
+        - name: Альбина
+          id: a.kariiimova
+    - number: "397"
+      members:
+        - name: Ксения
+          id: ksenyf
+        - name: Ангелина
+          id: angel__ku
+    - number: "398"
+      members:
+        - name: Айта
+          id: idnakwonlukimlee
+        - name: Руфина
+          id: karimovarufina
+        - name: Лилия
+          id: li.sing
 timings:
     - "7:30"
     - "19:30"

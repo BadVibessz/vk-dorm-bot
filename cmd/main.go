@@ -217,7 +217,7 @@ func main() {
 
 		}
 
-		_, err := s.Every(5).Seconds().WaitForSchedule().Do(ff)
+		_, err := s.Every(2).Seconds().WaitForSchedule().Do(ff)
 		if err != nil {
 			logger.Println(err)
 		}
