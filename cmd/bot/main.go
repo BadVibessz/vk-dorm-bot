@@ -81,7 +81,7 @@ func main() {
 	wg := sync.WaitGroup{}
 	ctx := context.Background()
 
-	bot.StartAsync(ctx, &wg, logger)
+	bot.StartAsync(ctx, &wg, logger, true)
 
 	wg.Wait()
 	println("App finished")

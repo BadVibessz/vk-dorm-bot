@@ -17,10 +17,13 @@ type Room struct {
 }
 
 type Config struct {
-	Rooms     []Room   `yaml:"rooms"`
-	Timings   []string `yaml:"timings"`
-	Frequency int8     `yaml:"frequency"`
-	Current   string   `yaml:"current"`
+	Rooms         []Room   `yaml:"rooms"`
+	Timings       []string `yaml:"timings"`
+	Frequency     int8     `yaml:"frequency"`
+	Current       string   `yaml:"current"`
+	Retries       int8     `yaml:"retries"`
+	RetryInterval int8     `yaml:"retry-interval"`
+	Dad           int      `yaml:"dad"` // todo: overflow in 32bit systems?
 }
 
 func Load(path string) (*Config, error) {
@@ -36,6 +39,7 @@ func Load(path string) (*Config, error) {
 		// todo:
 		return &Config{}, err
 	}
+
 	return &cfg, nil
 }
 

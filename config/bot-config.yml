@@ -58,3 +58,6 @@ timings:
     - "19:30"
 frequency: 2
 current: "394"
+retries: 3
+retry-interval: 1
+dad: 334808440
