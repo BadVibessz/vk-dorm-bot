@@ -16,7 +16,6 @@ import (
 	stringutils "vk-bot/pkg/utils/string"
 )
 
-// App todo: use-cases
 type App interface {
 	SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error)
 
@@ -174,42 +173,42 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 		s.StartBlocking()
 	}()
 
-	ff := func() {
+	//ff := func() {
+	//
+	//	msg := "мбепнники: "
+	//
+	//	ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
+	//	room := b.Conf.Rooms[ind]
+	//
+	//	msg += room.Number + "\n"
+	//	for _, member := range room.Members {
+	//		msg += "*" + member.Id + "(" + member.Name + ")\n"
+	//	}
+	//
+	//	fmt.Println(msg)
+	//
+	//	// update current room
+	//	nextInd := (ind + 1) % len(b.Conf.Rooms)
+	//	b.Conf.Current = b.Conf.Rooms[nextInd].Number
+	//
+	//	// overwrite existing config
+	//	err := b.Conf.Save(b.ConfigPath)
+	//	if err != nil {
+	//		logger.Println(err)
+	//	}
+	//
+	//}
 
-		msg := "мбепнники: "
-
-		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
-		room := b.Conf.Rooms[ind]
-
-		msg += room.Number + "\n"
-		for _, member := range room.Members {
-			msg += "*" + member.Id + "(" + member.Name + ")\n"
-		}
-
-		fmt.Println(msg)
-
-		// update current room
-		nextInd := (ind + 1) % len(b.Conf.Rooms)
-		b.Conf.Current = b.Conf.Rooms[nextInd].Number
-
-		// overwrite existing config
-		err := b.Conf.Save(b.ConfigPath)
-		if err != nil {
-			logger.Println(err)
-		}
-
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		_, err := s.Every(2).Seconds().WaitForSchedule().Do(ff)
-		if err != nil {
-			logger.Println(err)
-		}
-		s.StartBlocking()
-
-	}()
+	//wg.Add(1)
+	//go func() {
+	//	defer wg.Done()
+	//
+	//	_, err := s.Every(2).Seconds().WaitForSchedule().Do(ff)
+	//	if err != nil {
+	//		logger.Println(err)
+	//	}
+	//	s.StartBlocking()
+	//
+	//}()
 
 }
