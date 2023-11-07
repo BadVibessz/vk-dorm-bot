@@ -5,18 +5,24 @@ rooms:
           id: id819522445
         - name: Сердар
           id: id818959495
+    - swap-pending: false
+
     - number: "392"
       members:
         - name: Таня
           id: id316332619
         - name: Луиза
           id: luliza
+    - swap-pending: false
+
     - number: "393"
       members:
         - name: О'Брайен
           id: rooccat
         - name: Максим
           id: maxim.zaytsev2013
+    - swap-pending: false
+
     - number: "394"
       members:
         - name: Наиль
@@ -25,6 +31,8 @@ rooms:
           id: ito_ya
         - name: Данил
           id: khamzd
+    - swap-pending: false
+
     - number: "395"
       members:
         - name: Олег
@@ -33,18 +41,24 @@ rooms:
           id: id266736469
         - name: Никита
           id: id171920587
+    - swap-pending: false
+
     - number: "396"
       members:
         - name: Настя
           id: nastyfedorova03
         - name: Альбина
           id: a.kariiimova
+    - swap-pending: false
+
     - number: "397"
       members:
         - name: Ксения
           id: ksenyf
         - name: Ангелина
           id: angel__ku
+    - swap-pending: false
+
     - number: "398"
       members:
         - name: Айта
@@ -53,6 +67,8 @@ rooms:
           id: karimovarufina
         - name: Лилия
           id: li.sing
+    - swap-pending: false
+
 timings:
     - "7:30"
     - "19:30"

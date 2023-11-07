@@ -12,8 +12,9 @@ type Member struct {
 }
 
 type Room struct {
-	Number  string   `yaml:"number"`
-	Members []Member `yaml:"members"`
+	Number      string   `yaml:"number"`
+	Members     []Member `yaml:"members"`
+	SwapPending bool     `yaml:"swap-pending"`
 }
 
 type Config struct {
