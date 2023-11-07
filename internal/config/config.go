@@ -19,7 +19,7 @@ type Room struct {
 type Config struct {
 	Rooms         []Room   `yaml:"rooms"`
 	Timings       []string `yaml:"timings"`
-	Frequency     int8     `yaml:"frequency"`
+	Frequency     int      `yaml:"frequency"`
 	Current       string   `yaml:"current"`
 	Retries       int8     `yaml:"retries"`
 	RetryInterval int8     `yaml:"retry-interval"`

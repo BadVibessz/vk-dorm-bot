@@ -163,13 +163,11 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 			timings = "7:30;19:30"
 		}
 
-		job, err := s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
+		_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
 		if err != nil {
 			logger.Println(err)
 		}
 
-		//s.WaitForScheduleAll()
-		fmt.Printf("Job: %v, Error: %v", job, err)
 		s.StartBlocking()
 	}()
 
@@ -198,12 +196,12 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 	//	}
 	//
 	//}
-
+	//
 	//wg.Add(1)
 	//go func() {
 	//	defer wg.Done()
 	//
-	//	_, err := s.Every(2).Seconds().WaitForSchedule().Do(ff)
+	//	_, err := s.Every(b.Conf.Frequency).Seconds().WaitForSchedule().Do(ff)
 	//	if err != nil {
 	//		logger.Println(err)
 	//	}

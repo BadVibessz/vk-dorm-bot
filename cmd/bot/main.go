@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"vk-bot/internal/app"
 	apputils "vk-bot/pkg/utils/app"
@@ -15,6 +16,7 @@ import (
 
 const (
 	configPath = "config/bot-config.yml"
+	port       = 8080
 )
 
 var (
@@ -66,6 +68,27 @@ func initVars(logger *log.Logger) {
 
 }
 
+func startBot(logger *log.Logger) {
+
+}
+
+func startServer(bot *app.App, logger *log.Logger) {
+
+	mock := func(http.ResponseWriter, *http.Request) {
+		logger.Println("GOVNO")
+	}
+
+	http.HandleFunc("/callback", mock)
+
+	err := http.ListenAndServe(":"+strconv.Itoa(port), nil)
+	if err != nil {
+		apputils.HandleFatalError(err, logger)
+	}
+	logger.Println("Server started at port:" + strconv.Itoa(port))
+	z := 3
+	z += 1
+}
+
 func main() {
 
 	logger := log.New(os.Stderr, "", 3)
@@ -81,7 +104,11 @@ func main() {
 	wg := sync.WaitGroup{}
 	ctx := context.Background()
 
+	// start bot schedule
 	bot.StartAsync(ctx, &wg, logger, true)
+
+	// start server for events handling
+	go startServer(&bot, logger)
 
 	wg.Wait()
 	println("App finished")
