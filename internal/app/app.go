@@ -3,31 +3,34 @@ package app
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	vkapi "github.com/BadVibessz/vk-api"
+	"github.com/SevereCloud/vksdk/v2/events"
+	_ "github.com/SevereCloud/vksdk/v2/events"
 	"github.com/go-co-op/gocron"
-	"io"
 	"log"
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"vk-bot/internal/config"
-	stringutils "vk-bot/pkg/utils/string"
 )
 
 type App interface {
-	SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error)
-
-	HandleMessage(ctx context.Context, msg string)
-
 	NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error)
+	NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error)
+
+	SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error)
+	SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error
 
 	StartAsync(ctx context.Context, wg *sync.WaitGroup, logger *log.Logger, sendLogs bool)
+	HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger)
+
 	// todo: general function for starting any task with any schedule
 
-	SwapRooms(ctx context.Context, roomName1 string, roomName2 string)
 }
 
 type BotService struct {
@@ -88,9 +91,116 @@ func (b *BotService) SendMessageToChat(ctx context.Context, msg string, chatID, 
 	return b.sendMessage(ctx, msg, 2000000000+chatID, randID)
 }
 
-func (b *BotService) HandleMessage(ctx context.Context, msg string) {
-	//TODO implement me
-	panic("implement me")
+func (b *BotService) getQueueString() string {
+
+	var res string
+	for i, v := range b.Conf.Rooms {
+
+		res += " "
+
+		if v.Number == b.Conf.Current {
+			res += "[" + v.Number + "]"
+		} else {
+			res += v.Number
+		}
+
+		if i != len(b.Conf.Rooms)-1 {
+			res += " ->"
+		}
+	}
+	return res
+}
+
+func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger) {
+
+	msg := obj.Message.Text
+	from := obj.Message.FromID
+
+	log.Println(msg)
+
+	spltd := strings.Split(msg, " ")
+
+	switch spltd[0] {
+
+	case "/echo": // todo:
+		_, err := b.sendMessage(ctx, msg, from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+		break
+
+	// sort queue ascending
+	case "/reset":
+		b.resetQueue()
+
+		_, err := b.sendMessage(ctx, "Порядок комнат восстановлен по умолчанию", from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+
+		break
+
+	// set current room
+	case "/setcurrent":
+
+		// validate input
+		curr := spltd[1]
+		if slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == curr }) != -1 {
+			b.Conf.Current = curr
+
+			resp := "Номер текущей комнаты успешно изменен" + "\n" + "Новый порядок:\n" + b.getQueueString()
+			_, err := b.sendMessage(ctx, resp, from, 0)
+			if err != nil {
+				logger.Println(err)
+			}
+
+		} else {
+			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
+			if err != nil {
+				logger.Println(err)
+			}
+		}
+		break
+
+	case "/queue":
+		_, err := b.sendMessage(ctx, b.getQueueString(), from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+		break
+
+	case "/swap":
+		err := b.SwapRooms(ctx, spltd[1], spltd[2])
+		if err != nil {
+			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
+			if err != nil {
+				logger.Println(err)
+			}
+		} else {
+			resp := "Сделано!" + "\n" + "Новый порядок:\n" + b.getQueueString()
+			_, err := b.sendMessage(ctx, resp, from, 0)
+			if err != nil {
+				logger.Println(err)
+			}
+
+		}
+		break
+
+	case "/freq":
+
+		if n, err := strconv.Atoi(spltd[1]); err == nil && n <= 7 && n > 0 {
+
+			b.Conf.Frequency = n
+
+			err = b.saveConfig()
+			if err != nil {
+				logger.Println(err)
+			}
+		}
+
+		break
+	}
+
 }
 
 func (b *BotService) isSwapPending() bool {
@@ -101,6 +211,11 @@ func (b *BotService) isSwapPending() bool {
 		}
 	}
 	return false
+}
+
+func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error) {
@@ -122,10 +237,19 @@ func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *conf
 func (b *BotService) StartScheduledTaskAsync(task func()) { // todo: code generation?
 }
 
-func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 string) {
+func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error {
+
+	m := sync.Mutex{} // todo: where to define mutex?
+
+	m.Lock()
 
 	ind1 := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == roomName1 })
 	ind2 := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == roomName2 })
+
+	if ind1 == -1 || ind2 == -1 {
+		return errors.New("swap: no such room")
+	}
+	currInd := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
 
 	newQueue := slices.Clone(b.Conf.Rooms)
 
@@ -136,31 +260,71 @@ func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 
 	newQueue[ind2].SwapPending = true
 
 	b.Conf.Rooms = newQueue
+	m.Unlock()
+
+	// if we swapped current room -> necessarily to overwrite schedule
+	if ind1 == currInd {
+		b.Conf.Current = b.Conf.Rooms[currInd].Number
+		// b.saveConfig(logger)
+	}
+
+	println("\nsuccessfully swapped room " + roomName1 + " with " + roomName2)
+	println("\ncurrent schedule:")
+	for _, v := range b.Conf.Rooms {
+		if v.Number == b.Conf.Current {
+			print("*")
+		}
+		print(v.Number + " ")
+	}
+	return nil
+}
+
+func (b *BotService) saveConfig() error {
+	err := b.Conf.Save(b.ConfigPath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (b *BotService) resetQueue() {
+	slices.SortFunc(b.Conf.Rooms, func(r1, r2 config.Room) int {
+		return cmp.Compare(r1.Number, r2.Number)
+	})
 }
 
 func (b *BotService) updateQueue(currentInd int, logger *log.Logger) {
 
-	currentRoom := b.Conf.Rooms[currentInd]
+	currentRoom := &b.Conf.Rooms[currentInd]
 
 	// swap not pending anymore
 	if currentRoom.SwapPending {
 		currentRoom.SwapPending = false
+
+		// if room done its swapped duty -> it can be placed in its native order // todo:?
+		//b.Conf.
 	}
 
 	// TODO:
-	// if this room is on the end of weekly queue - and no swaps pending -> reset queue
-	if currentInd == len(b.Conf.Rooms)-1 && !b.isSwapPending() {
-		slices.SortFunc(b.Conf.Rooms, func(r1, r2 config.Room) int {
-			return cmp.Compare(r1.Number, r2.Number)
-		})
+	// if no swaps pending -> reset queue
+	if !b.isSwapPending() {
+		b.resetQueue()
 	}
 
 	// update current room
 	nextInd := (currentInd + 1) % len(b.Conf.Rooms)
 	b.Conf.Current = b.Conf.Rooms[nextInd].Number
 
+	println("\ncurrent schedule:")
+	for _, v := range b.Conf.Rooms {
+		if v.Number == b.Conf.Current {
+			print("*")
+		}
+		print(v.Number + " ")
+	}
+
 	// overwrite existing config
-	err := b.Conf.Save(b.ConfigPath)
+	err := b.saveConfig()
 	if err != nil {
 		logger.Println(err)
 	}
@@ -171,66 +335,79 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 
 	s := gocron.NewScheduler(time.UTC)
 
-	task := func() {
+	//task := func() {
+	//
+	//	ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
+	//	room := b.Conf.Rooms[ind]
+	//
+	//	// TODO: dynamically retrieve chat id by name
+	//	resp, err := b.NotifyAboutDuty(ctx, 1, &room)
+	//	if err != nil {
+	//		logger.Println(err)
+	//
+	//		if sendLogs {
+	//			_, logErr := b.sendLog(ctx, "notify about duty: "+err.Error())
+	//			if logErr != nil {
+	//				logger.Println(logErr) // todo: log to file
+	//			}
+	//		}
+	//	}
+	//
+	//	buf, err := io.ReadAll(resp.Body)
+	//	if err != nil {
+	//		logger.Println(err)
+	//	}
+	//	fmt.Println(stringutils.PrettyString(string(buf)))
+	//
+	//	// update current room and queue
+	//	b.updateQueue(ind, logger)
+	//}
+	//
+	//wg.Add(1)
+	//go func() {
+	//	defer wg.Done()
+	//
+	//	timings, err := stringutils.TimingsToString(b.Conf.Timings)
+	//	if err != nil {
+	//		// todo: send me log messages in vk direct?
+	//		fmt.Println(err)
+	//
+	//		// default timings if timings are not provided in conf file // todo: in .env?
+	//		timings = "7:30;19:30"
+	//	}
+	//
+	//	_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
+	//	if err != nil {
+	//		logger.Println(err)
+	//	}
+	//
+	//	s.StartBlocking()
+	//}()
 
-		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
-		room := b.Conf.Rooms[ind]
+	// todo: clean day scheduler
+	task2 := func() {
 
-		// TODO: dynamically retrieve chat id by name
-		resp, err := b.NotifyAboutDuty(ctx, 1, &room)
-		if err != nil {
-			logger.Println(err)
-
-			if sendLogs {
-				_, logErr := b.sendLog(ctx, err.Error())
-				if logErr != nil {
-					// todo: handle
-				}
-			}
-
-		}
-
-		buf, err := io.ReadAll(resp.Body)
-		if err != nil {
-			logger.Println(err)
-		}
-		fmt.Println(stringutils.PrettyString(string(buf)))
-
-		// update current room
-		nextInd := (ind + 1) % len(b.Conf.Rooms)
-		b.Conf.Current = b.Conf.Rooms[nextInd].Number
-
-		// overwrite existing config
-		err = b.Conf.Save(b.ConfigPath)
-		if err != nil {
-			logger.Println(err)
-		}
 	}
 
 	wg.Add(1)
 	go func() {
+
 		defer wg.Done()
 
-		timings, err := stringutils.TimingsToString(b.Conf.Timings)
-		if err != nil {
-			// todo: send me log messages in vk direct?
-			fmt.Println(err)
-
-			// default timings if timings are not provided in conf file // todo: in .env?
-			timings = "7:30;19:30"
+		// todo: https://github.com/algorythma/go-scheduler/blob/14b57fd34811/scheduler.go#L40
+		_, err := s.Every(1).Week().Weekday(time.Monday).At(b.Conf.CleanHour).Do(task2)
+		if sendLogs {
+			_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
+			if logErr != nil {
+				logger.Println(logErr) // todo: log to file
+			}
 		}
 
-		_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
-		if err != nil {
-			logger.Println(err)
-		}
-
-		s.StartBlocking()
 	}()
 
 	ff := func() {
 
-		msg := "мбепнники: "
+		msg := "\nмбепнники: "
 
 		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
 		room := b.Conf.Rooms[ind]
@@ -250,7 +427,7 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 	go func() {
 		defer wg.Done()
 
-		_, err := s.Every(b.Conf.Frequency).Seconds().WaitForSchedule().Do(ff)
+		_, err := s.Every(3).Seconds().WaitForSchedule().Do(ff)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -258,4 +435,5 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 
 	}()
 
+	logger.Println("Bot successfully started")
 }

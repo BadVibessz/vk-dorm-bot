@@ -12,6 +12,9 @@ import (
 	"sync"
 	"vk-bot/internal/app"
 	apputils "vk-bot/pkg/utils/app"
+
+	"github.com/SevereCloud/vksdk/v2/callback"
+	"github.com/SevereCloud/vksdk/v2/events"
 )
 
 const (
@@ -74,13 +77,18 @@ func startBot(logger *log.Logger) {
 
 func startServer(bot *app.App, logger *log.Logger) {
 
-	mock := func(http.ResponseWriter, *http.Request) {
-		logger.Println("GOVNO")
-	}
+	cb := callback.NewCallback()
 
-	http.HandleFunc("/callback", mock)
+	cb.ConfirmationKey = "cdaf39ca"
+
+	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
+		(*bot).HandleMessage(ctx, obj, logger)
+	})
+
+	http.HandleFunc("/callback", cb.HandleFunc)
 
 	logger.Println("Server started at port:" + strconv.Itoa(port))
+
 	err := http.ListenAndServe(":"+strconv.Itoa(port), nil)
 	if err != nil {
 		apputils.HandleFatalError(err, logger)
@@ -100,14 +108,24 @@ func main() {
 	}
 
 	wg := sync.WaitGroup{}
-	ctx := context.Background()
+	//ctx := context.Background()
 
 	// start bot schedule
-	bot.StartAsync(ctx, &wg, logger, true)
-	logger.Println("Bot successfully started")
+	//bot.StartAsync(ctx, &wg, logger, true)
 
 	// start server for events handling
+
+	wg.Add(1)
 	go startServer(&bot, logger)
+
+	//go func() {
+	//
+	//	time.Sleep(7 * time.Second)
+	//	bot.SwapRooms(ctx, "396", "398", logger)
+	//
+	//	time.Sleep(6 * time.Second)
+	//	bot.SwapRooms(ctx, "393", "394", logger)
+	//}()
 
 	wg.Wait()
 	println("App finished")

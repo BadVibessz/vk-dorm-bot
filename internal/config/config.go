@@ -22,6 +22,8 @@ type Config struct {
 	Timings       []string `yaml:"timings"`
 	Frequency     int      `yaml:"frequency"`
 	Current       string   `yaml:"current"`
+	CleanDay      string   `yaml:"clean-day"`
+	CleanHour     string   `yaml:"clean-hour"`
 	Retries       int8     `yaml:"retries"`
 	RetryInterval int8     `yaml:"retry-interval"`
 	Dad           int      `yaml:"dad"` // todo: overflow in 32bit systems?
