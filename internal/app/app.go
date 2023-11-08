@@ -9,6 +9,7 @@ import (
 	"github.com/SevereCloud/vksdk/v2/events"
 	_ "github.com/SevereCloud/vksdk/v2/events"
 	"github.com/go-co-op/gocron"
+	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 	"vk-bot/internal/config"
+	stringutils "vk-bot/pkg/utils/string"
 )
 
 type App interface {
@@ -335,89 +337,32 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 
 	s := gocron.NewScheduler(time.UTC)
 
-	//task := func() {
-	//
-	//	ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
-	//	room := b.Conf.Rooms[ind]
-	//
-	//	// TODO: dynamically retrieve chat id by name
-	//	resp, err := b.NotifyAboutDuty(ctx, 1, &room)
-	//	if err != nil {
-	//		logger.Println(err)
-	//
-	//		if sendLogs {
-	//			_, logErr := b.sendLog(ctx, "notify about duty: "+err.Error())
-	//			if logErr != nil {
-	//				logger.Println(logErr) // todo: log to file
-	//			}
-	//		}
-	//	}
-	//
-	//	buf, err := io.ReadAll(resp.Body)
-	//	if err != nil {
-	//		logger.Println(err)
-	//	}
-	//	fmt.Println(stringutils.PrettyString(string(buf)))
-	//
-	//	// update current room and queue
-	//	b.updateQueue(ind, logger)
-	//}
-	//
-	//wg.Add(1)
-	//go func() {
-	//	defer wg.Done()
-	//
-	//	timings, err := stringutils.TimingsToString(b.Conf.Timings)
-	//	if err != nil {
-	//		// todo: send me log messages in vk direct?
-	//		fmt.Println(err)
-	//
-	//		// default timings if timings are not provided in conf file // todo: in .env?
-	//		timings = "7:30;19:30"
-	//	}
-	//
-	//	_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
-	//	if err != nil {
-	//		logger.Println(err)
-	//	}
-	//
-	//	s.StartBlocking()
-	//}()
+	// todo: delete
+	b.SendMessageToChat(ctx, "Я включился!)", 1, 0)
 
-	// todo: clean day scheduler
-	task2 := func() {
-
-	}
-
-	wg.Add(1)
-	go func() {
-
-		defer wg.Done()
-
-		// todo: https://github.com/algorythma/go-scheduler/blob/14b57fd34811/scheduler.go#L40
-		_, err := s.Every(1).Week().Weekday(time.Monday).At(b.Conf.CleanHour).Do(task2)
-		if sendLogs {
-			_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
-			if logErr != nil {
-				logger.Println(logErr) // todo: log to file
-			}
-		}
-
-	}()
-
-	ff := func() {
-
-		msg := "\nмбепнники: "
+	task := func() {
 
 		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
 		room := b.Conf.Rooms[ind]
 
-		msg += room.Number + "\n"
-		for _, member := range room.Members {
-			msg += "*" + member.Id + "(" + member.Name + ")\n"
+		// TODO: dynamically retrieve chat id by name
+		resp, err := b.NotifyAboutDuty(ctx, 1, &room)
+		if err != nil {
+			logger.Println(err)
+
+			if sendLogs {
+				_, logErr := b.sendLog(ctx, "notify about duty: "+err.Error())
+				if logErr != nil {
+					logger.Println(logErr) // todo: log to file
+				}
+			}
 		}
 
-		fmt.Println(msg)
+		buf, err := io.ReadAll(resp.Body)
+		if err != nil {
+			logger.Println(err)
+		}
+		fmt.Println(stringutils.PrettyString(string(buf)))
 
 		// update current room and queue
 		b.updateQueue(ind, logger)
@@ -427,13 +372,73 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 	go func() {
 		defer wg.Done()
 
-		_, err := s.Every(3).Seconds().WaitForSchedule().Do(ff)
+		timings, err := stringutils.TimingsToString(b.Conf.Timings)
+		if err != nil {
+			// todo: send me log messages in vk direct?
+			fmt.Println(err)
+
+			// default timings if timings are not provided in conf file // todo: in .env?
+			timings = "7:30;19:30"
+		}
+
+		_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
 		if err != nil {
 			logger.Println(err)
 		}
-		s.StartBlocking()
 
+		s.StartBlocking()
 	}()
+
+	//// todo: clean day scheduler
+	//task2 := func() {
+	//
+	//}
+	//
+	//wg.Add(1)
+	//go func() {
+	//
+	//	defer wg.Done()
+	//
+	//	// todo: https://github.com/algorythma/go-scheduler/blob/14b57fd34811/scheduler.go#L40
+	//	_, err := s.Every(1).Week().Weekday(time.Monday).At(b.Conf.CleanHour).Do(task2)
+	//	if sendLogs {
+	//		_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
+	//		if logErr != nil {
+	//			logger.Println(logErr) // todo: log to file
+	//		}
+	//	}
+	//
+	//}()
+	//
+	//ff := func() {
+	//
+	//	msg := "\nмбепнники: "
+	//
+	//	ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
+	//	room := b.Conf.Rooms[ind]
+	//
+	//	msg += room.Number + "\n"
+	//	for _, member := range room.Members {
+	//		msg += "*" + member.Id + "(" + member.Name + ")\n"
+	//	}
+	//
+	//	fmt.Println(msg)
+	//
+	//	// update current room and queue
+	//	b.updateQueue(ind, logger)
+	//}
+	//
+	//wg.Add(1)
+	//go func() {
+	//	defer wg.Done()
+	//
+	//	_, err := s.Every(3).Seconds().WaitForSchedule().Do(ff)
+	//	if err != nil {
+	//		logger.Println(err)
+	//	}
+	//	s.StartBlocking()
+	//
+	//}()
 
 	logger.Println("Bot successfully started")
 }

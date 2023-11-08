@@ -108,24 +108,14 @@ func main() {
 	}
 
 	wg := sync.WaitGroup{}
-	//ctx := context.Background()
+	ctx := context.Background()
 
 	// start bot schedule
-	//bot.StartAsync(ctx, &wg, logger, true)
+	bot.StartAsync(ctx, &wg, logger, true)
 
 	// start server for events handling
-
 	wg.Add(1)
 	go startServer(&bot, logger)
-
-	//go func() {
-	//
-	//	time.Sleep(7 * time.Second)
-	//	bot.SwapRooms(ctx, "396", "398", logger)
-	//
-	//	time.Sleep(6 * time.Second)
-	//	bot.SwapRooms(ctx, "393", "394", logger)
-	//}()
 
 	wg.Wait()
 	println("App finished")
