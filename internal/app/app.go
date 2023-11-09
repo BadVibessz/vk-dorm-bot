@@ -28,7 +28,7 @@ type App interface {
 	SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error)
 	SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error
 
-	StartAsync(ctx context.Context, wg *sync.WaitGroup, logger *log.Logger, sendLogs bool)
+	StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool)
 	HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger)
 
 	// todo: general function for starting any task with any schedule
@@ -39,7 +39,12 @@ type BotService struct {
 	ConfigPath string
 	Conf       *config.Config
 
+	wg *sync.WaitGroup
+
 	VK *vkapi.VkAPI
+
+	cleanDayJobCtx        *context.Context
+	cleanDayJobCancelFunc *context.CancelFunc
 }
 
 func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
@@ -53,6 +58,7 @@ func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
 		ConfigPath: configPath,
 		Conf:       conf,
 		VK:         vk,
+		wg:         &sync.WaitGroup{},
 	}, nil
 }
 
@@ -104,6 +110,10 @@ func (b *BotService) getQueueString() string {
 			res += "[" + v.Number + "]"
 		} else {
 			res += v.Number
+		}
+
+		if v.SwapPending {
+			res += "*"
 		}
 
 		if i != len(b.Conf.Rooms)-1 {
@@ -201,6 +211,31 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 
 		break
+
+	case "/setcleanday":
+
+		day := strings.ToLower(spltd[1])
+
+		// todo: validate!
+		// if slices.IndexFunc != -1{
+
+		// cancel scheduled task
+		(*b.cleanDayJobCancelFunc)()
+
+		// set clean day
+		b.Conf.CleanDay = day
+
+		// restart task
+		b.scheduleCleanDayTask(ctx, logger, true)
+
+		_, err := b.sendMessage(ctx, "День уборки успешно изменен на "+day, from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+
+		break
+
+		// todo: /setcleanhour
 	}
 
 }
@@ -216,8 +251,23 @@ func (b *BotService) isSwapPending() bool {
 }
 
 func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error) {
-	//TODO implement me
-	panic("implement me")
+
+	spltd := strings.Split(b.Conf.CleanHour, ":")
+
+	hour, err := strconv.Atoi(spltd[0])
+	if err != nil {
+		return nil, err
+	}
+
+	mscHour := strconv.Itoa(hour + 3) // todo:
+	msg := "@all\n" + "Напоминаю, сегодня проверка в " + mscHour + ":" + spltd[1]
+
+	resp, err := b.SendMessageToChat(ctx, msg, chatId, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error) {
@@ -290,6 +340,11 @@ func (b *BotService) saveConfig() error {
 }
 
 func (b *BotService) resetQueue() {
+
+	for _, v := range b.Conf.Rooms {
+		v.SwapPending = false
+	}
+
 	slices.SortFunc(b.Conf.Rooms, func(r1, r2 config.Room) int {
 		return cmp.Compare(r1.Number, r2.Number)
 	})
@@ -332,15 +387,101 @@ func (b *BotService) updateQueue(currentInd int, logger *log.Logger) {
 	}
 }
 
+func (b *BotService) setCleanDay() {
+
+}
+
+func getSchedulerByWeekday(s *gocron.Scheduler, weekday string) (*gocron.Scheduler, error) {
+
+	switch strings.ToLower(weekday) {
+
+	case "monday", "понедельник":
+		return s.Every(1).Week().Weekday(time.Monday), nil
+	case "tuesday", "вторник":
+		return s.Every(1).Week().Weekday(time.Tuesday), nil
+	case "wednesday", "среда":
+		return s.Every(1).Week().Weekday(time.Wednesday), nil
+	case "thursday", "четверг":
+		return s.Every(1).Week().Weekday(time.Thursday), nil
+	case "friday", "пятница":
+		return s.Every(1).Week().Weekday(time.Friday), nil
+	case "saturday", "суббота":
+		return s.Every(1).Week().Weekday(time.Saturday), nil
+	case "sunday", "воскресенье":
+		return s.Every(1).Week().Weekday(time.Sunday), nil
+	}
+
+	return nil, errors.New("no such weekday")
+}
+
+// todo: maybe store context in bot struct? what context to pass here?
+func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger, sendLogs bool) {
+
+	// init cancellation context
+	cleanDayTaskCtx, cancel := context.WithCancel(ctx)
+	b.cleanDayJobCtx = &cleanDayTaskCtx
+	b.cleanDayJobCancelFunc = &cancel
+
+	cleanTask := func() {
+		resp, err := b.NotifyAboutCleaning(ctx, 1)
+		if err != nil {
+			logger.Println(err)
+
+			if sendLogs {
+				_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
+				if logErr != nil {
+					logger.Println(logErr)
+				}
+			}
+		}
+
+		buf, err := io.ReadAll(resp.Body)
+		if err != nil {
+			logger.Println(err)
+		}
+		fmt.Println(stringutils.PrettyString(string(buf)))
+	}
+
+	cleanDayScheduler := gocron.NewScheduler(time.UTC)
+
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+
+		// todo: Do with context not working? try scheduler.Remove()
+		scheduler, parseErr := getSchedulerByWeekday(cleanDayScheduler, b.Conf.CleanDay)
+		if parseErr == nil {
+			_, doErr := scheduler.At(b.Conf.CleanHour).Do(cleanTask, *b.cleanDayJobCtx)
+			if sendLogs && doErr != nil {
+
+				logger.Println(doErr)
+
+				_, logErr := b.sendLog(ctx, "notify about clean: "+doErr.Error())
+				if logErr != nil {
+					logger.Println(logErr)
+				}
+			} else {
+				cleanDayScheduler.StartBlocking()
+			}
+		} else {
+			logger.Println(parseErr)
+		}
+
+	}()
+
+}
+
 // todo: call generic method StartTaskAsync(task func(), ctx ...)
-func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger *log.Logger, sendLogs bool) {
+func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool) {
 
-	s := gocron.NewScheduler(time.UTC)
+	dutyScheduler := gocron.NewScheduler(time.UTC)
 
-	// todo: delete
-	b.SendMessageToChat(ctx, "Я включился!)", 1, 0)
+	_, err := b.sendMessage(ctx, "Я включился!)", b.Conf.Dad, 0)
+	if err != nil {
+		logger.Println(err)
+	}
 
-	task := func() {
+	dutyTask := func() {
 
 		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
 		room := b.Conf.Rooms[ind]
@@ -368,9 +509,9 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 		b.updateQueue(ind, logger)
 	}
 
-	wg.Add(1)
+	b.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer b.wg.Done()
 
 		timings, err := stringutils.TimingsToString(b.Conf.Timings)
 		if err != nil {
@@ -381,35 +522,16 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 			timings = "7:30;19:30"
 		}
 
-		_, err = s.Every(b.Conf.Frequency).Day().At(timings).Do(task)
+		_, err = dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Do(dutyTask)
 		if err != nil {
 			logger.Println(err)
 		}
 
-		s.StartBlocking()
+		dutyScheduler.StartBlocking()
 	}()
 
-	//// todo: clean day scheduler
-	//task2 := func() {
-	//
-	//}
-	//
-	//wg.Add(1)
-	//go func() {
-	//
-	//	defer wg.Done()
-	//
-	//	// todo: https://github.com/algorythma/go-scheduler/blob/14b57fd34811/scheduler.go#L40
-	//	_, err := s.Every(1).Week().Weekday(time.Monday).At(b.Conf.CleanHour).Do(task2)
-	//	if sendLogs {
-	//		_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
-	//		if logErr != nil {
-	//			logger.Println(logErr) // todo: log to file
-	//		}
-	//	}
-	//
-	//}()
-	//
+	b.scheduleCleanDayTask(ctx, logger, sendLogs)
+
 	//ff := func() {
 	//
 	//	msg := "\nмбепнники: "
@@ -432,11 +554,11 @@ func (b *BotService) StartAsync(ctx context.Context, wg *sync.WaitGroup, logger 
 	//go func() {
 	//	defer wg.Done()
 	//
-	//	_, err := s.Every(3).Seconds().WaitForSchedule().Do(ff)
+	//	_, err := dutyScheduler.Every(3).Seconds().WaitForSchedule().Do(ff)
 	//	if err != nil {
 	//		logger.Println(err)
 	//	}
-	//	s.StartBlocking()
+	//	dutyScheduler.StartBlocking()
 	//
 	//}()
 

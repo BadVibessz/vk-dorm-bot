@@ -111,7 +111,7 @@ func main() {
 	ctx := context.Background()
 
 	// start bot schedule
-	bot.StartAsync(ctx, &wg, logger, true)
+	bot.StartAsync(ctx, logger, true)
 
 	// start server for events handling
 	wg.Add(1)
