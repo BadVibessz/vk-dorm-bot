@@ -79,7 +79,7 @@ func startServer(bot *app.App, logger *log.Logger) {
 
 	cb := callback.NewCallback()
 
-	cb.ConfirmationKey = "cdaf39ca"
+	cb.ConfirmationKey = "0d38468a"
 
 	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
 		(*bot).HandleMessage(ctx, obj, logger)

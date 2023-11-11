@@ -43,8 +43,14 @@ type BotService struct {
 
 	VK *vkapi.VkAPI
 
+	// todo: remove
 	cleanDayJobCtx        *context.Context
 	cleanDayJobCancelFunc *context.CancelFunc
+
+	dutyScheduler  *gocron.Scheduler
+	cleanScheduler *gocron.Scheduler
+
+	context context.Context
 }
 
 func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
@@ -161,13 +167,13 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			b.Conf.Current = curr
 
 			resp := "Номер текущей комнаты успешно изменен" + "\n" + "Новый порядок:\n" + b.getQueueString()
-			_, err := b.sendMessage(ctx, resp, from, 0)
+			_, err := b.sendMessage(b.context, resp, from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
 
 		} else {
-			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
+			_, err := b.sendMessage(b.context, "Некорректный номер комнаты", from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
@@ -175,7 +181,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		break
 
 	case "/queue":
-		_, err := b.sendMessage(ctx, b.getQueueString(), from, 0)
+		_, err := b.sendMessage(b.context, b.getQueueString(), from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -184,13 +190,13 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 	case "/swap":
 		err := b.SwapRooms(ctx, spltd[1], spltd[2])
 		if err != nil {
-			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
+			_, err := b.sendMessage(b.context, "Некорректный номер комнаты", from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
 		} else {
 			resp := "Сделано!" + "\n" + "Новый порядок:\n" + b.getQueueString()
-			_, err := b.sendMessage(ctx, resp, from, 0)
+			_, err := b.sendMessage(b.context, resp, from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
@@ -220,22 +226,52 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		// if slices.IndexFunc != -1{
 
 		// cancel scheduled task
-		(*b.cleanDayJobCancelFunc)()
+		err := b.cleanScheduler.RemoveByTag("cleanday")
+		if err != nil {
+			logger.Println(err)
+			_, err = b.sendMessage(b.context, "Что-то пошло не так...", from, 0)
+			return
+		}
 
 		// set clean day
 		b.Conf.CleanDay = day
 
 		// restart task
-		b.scheduleCleanDayTask(ctx, logger, true)
+		b.scheduleCleanDayTask(b.context, logger, true)
 
-		_, err := b.sendMessage(ctx, "День уборки успешно изменен на "+day, from, 0)
+		_, err = b.sendMessage(b.context, "День уборки успешно изменен на "+day, from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
 
 		break
 
-		// todo: /setcleanhour
+	case "/setcleanhour":
+
+		// todo: validate!
+
+		hour := spltd[1]
+
+		// cancel scheduled task
+		err := b.cleanScheduler.RemoveByTag("cleanday")
+		if err != nil {
+			logger.Println(err)
+			_, err = b.sendMessage(b.context, "Что-то пошло не так...", from, 0)
+			return
+		}
+
+		// set clean day
+		b.Conf.CleanHour = hour // todo: msc time handle
+
+		// restart task
+		b.scheduleCleanDayTask(ctx, logger, true)
+
+		_, err = b.sendMessage(b.context, "Время уборки успешно изменено на "+hour, from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+
+		break
 	}
 
 }
@@ -262,7 +298,8 @@ func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http
 	mscHour := strconv.Itoa(hour + 3) // todo:
 	msg := "@all\n" + "Напоминаю, сегодня проверка в " + mscHour + ":" + spltd[1]
 
-	resp, err := b.SendMessageToChat(ctx, msg, chatId, 0)
+	// todo: why from HandleMessage im getting 'value ctx from vksdk?'
+	resp, err := b.SendMessageToChat(b.context, msg, chatId, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -418,9 +455,6 @@ func getSchedulerByWeekday(s *gocron.Scheduler, weekday string) (*gocron.Schedul
 func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger, sendLogs bool) {
 
 	// init cancellation context
-	cleanDayTaskCtx, cancel := context.WithCancel(ctx)
-	b.cleanDayJobCtx = &cleanDayTaskCtx
-	b.cleanDayJobCancelFunc = &cancel
 
 	cleanTask := func() {
 		resp, err := b.NotifyAboutCleaning(ctx, 1)
@@ -442,16 +476,16 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 		fmt.Println(stringutils.PrettyString(string(buf)))
 	}
 
-	cleanDayScheduler := gocron.NewScheduler(time.UTC)
+	b.cleanScheduler = gocron.NewScheduler(time.UTC)
 
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
 
-		// todo: Do with context not working? try scheduler.Remove()
-		scheduler, parseErr := getSchedulerByWeekday(cleanDayScheduler, b.Conf.CleanDay)
+		// todo: Do with context param seem not working try scheduler.Remove()
+		scheduler, parseErr := getSchedulerByWeekday(b.cleanScheduler, b.Conf.CleanDay)
 		if parseErr == nil {
-			_, doErr := scheduler.At(b.Conf.CleanHour).Do(cleanTask, *b.cleanDayJobCtx)
+			_, doErr := scheduler.At(b.Conf.CleanHour).Tag("cleanday").Do(cleanTask)
 			if sendLogs && doErr != nil {
 
 				logger.Println(doErr)
@@ -461,7 +495,7 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 					logger.Println(logErr)
 				}
 			} else {
-				cleanDayScheduler.StartBlocking()
+				b.cleanScheduler.StartBlocking()
 			}
 		} else {
 			logger.Println(parseErr)
@@ -474,7 +508,9 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 // todo: call generic method StartTaskAsync(task func(), ctx ...)
 func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool) {
 
-	dutyScheduler := gocron.NewScheduler(time.UTC)
+	b.context = ctx
+
+	b.dutyScheduler = gocron.NewScheduler(time.UTC)
 
 	_, err := b.sendMessage(ctx, "Я включился!)", b.Conf.Dad, 0)
 	if err != nil {
@@ -522,12 +558,12 @@ func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLog
 			timings = "7:30;19:30"
 		}
 
-		_, err = dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Do(dutyTask)
+		_, err = b.dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Do(dutyTask)
 		if err != nil {
 			logger.Println(err)
 		}
 
-		dutyScheduler.StartBlocking()
+		b.dutyScheduler.StartBlocking()
 	}()
 
 	b.scheduleCleanDayTask(ctx, logger, sendLogs)
