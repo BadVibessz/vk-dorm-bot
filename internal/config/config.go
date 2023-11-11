@@ -39,7 +39,6 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	err = yaml.Unmarshal(content, &cfg)
 	if err != nil {
-		// todo:
 		return &Config{}, err
 	}
 

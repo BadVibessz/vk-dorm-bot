@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	vkapi "github.com/BadVibessz/vk-api"
+	"github.com/SevereCloud/vksdk/v2/callback"
+	"github.com/SevereCloud/vksdk/v2/events"
 	"github.com/joho/godotenv"
 	"log"
 	"net/http"
@@ -12,9 +14,6 @@ import (
 	"sync"
 	"vk-bot/internal/app"
 	apputils "vk-bot/pkg/utils/app"
-
-	"github.com/SevereCloud/vksdk/v2/callback"
-	"github.com/SevereCloud/vksdk/v2/events"
 )
 
 const (
