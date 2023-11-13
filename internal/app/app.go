@@ -236,6 +236,15 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 		break
 
+	case "/getcleanday":
+
+		_, err := b.sendMessage(b.context, "День уборки: "+b.Conf.CleanDay, from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+
+		break
+
 	case "/setcleanday":
 
 		day := strings.ToLower(spltd[1])
@@ -270,6 +279,15 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		saveErr := b.saveConfig()
 		if saveErr != nil {
 			logger.Println(saveErr)
+		}
+
+		break
+
+	case "/getcleanhour":
+
+		_, err := b.sendMessage(b.context, "Время уборки: "+b.Conf.CleanHour, from, 0)
+		if err != nil {
+			logger.Println(err)
 		}
 
 		break
@@ -370,6 +388,8 @@ func (b *BotService) StartScheduledTaskAsync(task func()) { // todo: code genera
 
 func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error {
 
+	// TODO: если комнаты свапнулись после первого тайминга, то отработает mod (len(timings)), который выдаст ненулевой результат. *проверять по времени?
+
 	b.swapped = true
 
 	m := sync.Mutex{} // todo: where to define mutex?
@@ -464,7 +484,7 @@ func (b *BotService) updateQueue(currentInd int) {
 func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger, sendLogs bool) {
 
 	cleanTask := func() {
-		resp, err := b.NotifyAboutCleaning(ctx, 1)
+		resp, err := b.NotifyAboutCleaning(ctx, 2)
 		if err != nil {
 			logger.Println(err)
 
@@ -538,7 +558,7 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger, s
 		room := b.Conf.Rooms[ind]
 
 		// TODO: dynamically retrieve chat id by name
-		resp, err := b.NotifyAboutDuty(ctx, 1, &room)
+		resp, err := b.NotifyAboutDuty(ctx, 2, &room)
 		if err != nil {
 			logger.Println(err)
 
