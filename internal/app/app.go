@@ -31,8 +31,7 @@ type App interface {
 	StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool)
 	HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger)
 
-	// todo: general function for starting any task with any schedule
-
+	// general function for starting any task with any schedule?
 }
 
 type BotService struct {
@@ -46,12 +45,13 @@ type BotService struct {
 	dutyScheduler  *gocron.Scheduler
 	cleanScheduler *gocron.Scheduler
 
-	context context.Context // TODO: Contexts should not be stored inside a struct type, but instead passed to each function that needs it.
+	sendLogs bool
+	swapped  bool
+	accepted bool
+	skipped  bool
 
-	swapped bool
-
-	// count of notified duties, todo: rename
-	count int
+	// count int
+	skippedCount int
 }
 
 func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
@@ -67,10 +67,6 @@ func NewBot(vk *vkapi.VkAPI, configPath string) (App, error) {
 		VK:         vk,
 		wg:         &sync.WaitGroup{},
 	}, nil
-}
-
-func (b *BotService) sendLog(ctx context.Context, log string) (*http.Response, error) {
-	return b.sendMessage(ctx, log, b.Conf.Dad, 0)
 }
 
 func (b *BotService) sendMessage(ctx context.Context, msg string, peerId, randID int) (*http.Response, error) {
@@ -130,10 +126,30 @@ func (b *BotService) getQueueString() string {
 	return res
 }
 
+func (b *BotService) log(ctx context.Context, msg string, logger *log.Logger) {
+	logger.Println(msg)
+
+	if b.sendLogs {
+		_, logErr := b.sendMessage(ctx, msg, b.Conf.Dad, 0)
+		if logErr != nil {
+			logger.Println(logErr)
+		}
+	}
+}
+
 func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger) {
 
 	msg := obj.Message.Text
 	from := obj.Message.FromID
+
+	// authenticate
+	if slices.IndexFunc(append(b.Conf.Admins, b.Conf.Dad), func(n int) bool { return n == from }) == -1 {
+		_, err := b.sendMessage(ctx, "У тебя нет прав, чтобы запрашивать данную команду.", from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+		return
+	}
 
 	log.Println(msg)
 
@@ -149,7 +165,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		break
 
 	// sort queue ascending
-	case "/reset": // todo: store admin's ids in config and then check if message from admin
+	case "/reset":
 		b.resetQueue()
 
 		_, err := b.sendMessage(ctx, "Порядок комнат восстановлен по умолчанию", from, 0)
@@ -174,7 +190,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			b.Conf.Current = curr
 
 			resp := "Номер текущей комнаты успешно изменен" + "\n" + "Новый порядок:\n" + b.getQueueString()
-			_, err := b.sendMessage(b.context, resp, from, 0)
+			_, err := b.sendMessage(ctx, resp, from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
@@ -186,7 +202,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			}
 
 		} else {
-			_, err := b.sendMessage(b.context, "Некорректный номер комнаты", from, 0)
+			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
@@ -194,7 +210,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		break
 
 	case "/queue":
-		_, err := b.sendMessage(b.context, b.getQueueString(), from, 0)
+		_, err := b.sendMessage(ctx, b.getQueueString(), from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -203,13 +219,13 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 	case "/swap":
 		err := b.SwapRooms(ctx, spltd[1], spltd[2])
 		if err != nil {
-			_, sendErr := b.sendMessage(b.context, "Некорректный номер комнаты", from, 0)
+			_, sendErr := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
 			if sendErr != nil {
 				logger.Println(sendErr)
 			}
 		} else {
 			resp := "Сделано!" + "\n" + "Новый порядок:\n" + b.getQueueString()
-			_, err := b.sendMessage(b.context, resp, from, 0)
+			_, err := b.sendMessage(ctx, resp, from, 0)
 			if err != nil {
 				logger.Println(err)
 			}
@@ -238,7 +254,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 	case "/getcleanday":
 
-		_, err := b.sendMessage(b.context, "День уборки: "+b.Conf.CleanDay, from, 0)
+		_, err := b.sendMessage(ctx, "День уборки: "+b.Conf.CleanDay, from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -252,7 +268,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		_, err := stringutils.GetWeekday(day)
 		if err != nil {
 			logger.Println(err)
-			_, err = b.sendMessage(b.context, "Такого дня недели не существует", from, 0)
+			_, err = b.sendMessage(ctx, "Такого дня недели не существует", from, 0)
 			return
 		}
 
@@ -260,7 +276,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		err = b.cleanScheduler.RemoveByTag("cleanday")
 		if err != nil {
 			logger.Println(err)
-			_, err = b.sendMessage(b.context, "Что-то пошло не так...", from, 0)
+			_, err = b.sendMessage(ctx, "Что-то пошло не так...", from, 0)
 			return
 		}
 
@@ -268,9 +284,9 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		b.Conf.CleanDay = day
 
 		// restart task
-		b.scheduleCleanDayTask(b.context, logger, true)
+		b.scheduleCleanDayTask(ctx, logger)
 
-		_, err = b.sendMessage(b.context, "День уборки успешно изменен на "+day, from, 0)
+		_, err = b.sendMessage(ctx, "День уборки успешно изменен на "+day, from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -285,7 +301,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 	case "/getcleanhour":
 
-		_, err := b.sendMessage(b.context, "Время уборки: "+b.Conf.CleanHour, from, 0)
+		_, err := b.sendMessage(ctx, "Время уборки: "+b.Conf.CleanHour, from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -299,7 +315,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		err := stringutils.ValidateTime(cleanTime)
 		if err != nil {
 			logger.Println(err)
-			_, err = b.sendMessage(b.context, "Указано некорректное время", from, 0)
+			_, err = b.sendMessage(ctx, "Указано некорректное время", from, 0)
 			return
 		}
 
@@ -307,7 +323,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		err = b.cleanScheduler.RemoveByTag("cleanday")
 		if err != nil {
 			logger.Println(err)
-			_, err = b.sendMessage(b.context, "Что-то пошло не так...", from, 0)
+			_, err = b.sendMessage(ctx, "Что-то пошло не так...", from, 0)
 			return
 		}
 
@@ -315,9 +331,9 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		b.Conf.CleanHour = cleanTime
 
 		// restart task
-		b.scheduleCleanDayTask(ctx, logger, true)
+		b.scheduleCleanDayTask(ctx, logger)
 
-		_, err = b.sendMessage(b.context, "Время уборки успешно изменено на "+cleanTime, from, 0)
+		_, err = b.sendMessage(ctx, "Время уборки успешно изменено на "+cleanTime, from, 0)
 		if err != nil {
 			logger.Println(err)
 		}
@@ -329,6 +345,22 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 
 		break
+
+	case "/accepted":
+
+		// if accepted -> current = current.next
+		b.accepted = true
+
+		// send response to user
+		_, err := b.sendMessage(ctx, "Понял!\nСледующий раз напомню "+b.Conf.Rooms[b.getCurrentRoomIndex()+1].Number+" комнате.", from, 0)
+		if err != nil {
+			logger.Println(err)
+		}
+
+		break
+
+	case "/skip":
+
 	}
 
 }
@@ -345,18 +377,13 @@ func (b *BotService) isSwapPending() bool {
 
 func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error) {
 
-	spltd := strings.Split(b.Conf.CleanHour, ":")
-
-	hour, err := strconv.Atoi(spltd[0])
+	err := stringutils.ValidateTime(b.Conf.CleanHour)
 	if err != nil {
 		return nil, err
 	}
 
-	mscHour := strconv.Itoa(hour + 3) // todo:
-	msg := "@all\n" + "Напоминаю, сегодня проверка в " + mscHour + ":" + spltd[1]
-
-	// todo: why from HandleMessage im getting 'value ctx from vksdk?'
-	resp, err := b.SendMessageToChat(b.context, msg, chatId, 0)
+	msg := "@all\n" + "Напоминаю, сегодня проверка в " + b.Conf.CleanHour
+	resp, err := b.SendMessageToChat(ctx, msg, chatId, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +393,8 @@ func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http
 
 func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error) {
 
-	b.count++
-	b.count %= len(b.Conf.Timings) // take mod of count to know if it's time to move to next room
+	// b.count++
+	// b.count %= len(b.Conf.Timings) // take mod of count to know if it's time to move to next room
 
 	msg := "Дежурные: " + room.Number + "\n"
 	for _, member := range room.Members {
@@ -388,11 +415,9 @@ func (b *BotService) StartScheduledTaskAsync(task func()) { // todo: code genera
 
 func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error {
 
-	// TODO: если комнаты свапнулись после первого тайминга, то отработает mod (len(timings)), который выдаст ненулевой результат. *проверять по времени?
-
 	b.swapped = true
 
-	m := sync.Mutex{} // todo: where to define mutex?
+	m := sync.Mutex{} // todo: where to define mutex? is mutex necessarily here?
 
 	m.Lock()
 
@@ -450,8 +475,13 @@ func (b *BotService) resetQueue() {
 	})
 }
 
-func (b *BotService) updateQueue(currentInd int) {
+func (b *BotService) getCurrentRoomIndex() int {
+	return slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
+}
 
+func (b *BotService) updateQueue() error {
+
+	currentInd := b.getCurrentRoomIndex()
 	currentRoom := &b.Conf.Rooms[currentInd]
 
 	// swap not pending anymore
@@ -464,13 +494,41 @@ func (b *BotService) updateQueue(currentInd int) {
 		b.resetQueue()
 	}
 
-	// update current room if count == 0
-	if b.count == 0 {
-		nextInd := (currentInd + 1) % len(b.Conf.Rooms)
-		b.Conf.Current = b.Conf.Rooms[nextInd].Number
+	nowHour, nowMin := time.Now().Hour(), time.Now().Minute()
+	spltd := strings.Split(b.Conf.Timings[len(b.Conf.Timings)-1], ":")
+
+	lastHour, err := strconv.Atoi(spltd[0])
+	if err != nil {
+		return err
 	}
 
-	// todo: distinct func
+	lastMin, err := strconv.Atoi(spltd[1])
+	if err != nil {
+		return err
+	}
+
+	// move to the next room // todo: test
+	if (nowHour > lastHour) || (nowHour == lastHour && nowMin >= lastMin) {
+		nextInd := (currentInd + 1) % len(b.Conf.Rooms)
+		b.Conf.Current = b.Conf.Rooms[nextInd].Number
+
+		// reset accepted flag
+		b.accepted = false
+
+		// recalc skippedCount
+		b.skippedCount--
+
+		if b.skippedCount == 0 {
+			b.skipped = false
+		}
+
+	}
+
+	b.printDutySchedule()
+	return nil
+}
+
+func (b *BotService) printDutySchedule() {
 	println("\ncurrent schedule:")
 	for _, v := range b.Conf.Rooms {
 		if v.Number == b.Conf.Current {
@@ -480,20 +538,12 @@ func (b *BotService) updateQueue(currentInd int) {
 	}
 }
 
-// todo: maybe store context in bot struct? what context to pass here?
-func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger, sendLogs bool) {
+func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger) {
 
 	cleanTask := func() {
-		resp, err := b.NotifyAboutCleaning(ctx, 2)
+		resp, err := b.NotifyAboutCleaning(ctx, 1)
 		if err != nil {
-			logger.Println(err)
-
-			if sendLogs {
-				_, logErr := b.sendLog(ctx, "notify about clean: "+err.Error())
-				if logErr != nil {
-					logger.Println(logErr)
-				}
-			}
+			b.log(ctx, "schedule clean task: "+err.Error(), logger)
 		}
 
 		buf, err := io.ReadAll(resp.Body)
@@ -514,75 +564,69 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 
 			cleanHour, parseErr := stringutils.MoscowTimeToGMT(b.Conf.CleanHour)
 			if parseErr != nil {
-				logger.Println(parseErr)
-
-				if sendLogs {
-					_, sendErr := b.sendLog(ctx, "notify about clean: "+parseErr.Error())
-					if sendErr != nil {
-						logger.Println(sendErr)
-					}
-				}
+				b.log(ctx, "schedule clean task: "+parseErr.Error(), logger)
 			}
+
+			// todo: обработать случаи ведущих нулей (только зачем?, для красоты!)
+			spltd := strings.Split(cleanHour, ":")
+
+			h, strvErr := strconv.Atoi(spltd[0])
+			if strvErr != nil {
+				logger.Println(strvErr)
+			}
+
+			notifyTime := strconv.Itoa(h-3) + ":" + spltd[1]
 
 			_, doErr := b.cleanScheduler.Every(1).
 				Week().
 				Weekday(weekday).
-				At(cleanHour).
+				At(notifyTime).
 				Tag("cleanday").
 				Do(cleanTask)
 
 			if doErr != nil {
-				logger.Println(doErr)
-
-				if sendLogs {
-					_, sendErr := b.sendLog(ctx, "notify about clean: "+doErr.Error())
-					if sendErr != nil {
-						logger.Println(sendErr)
-					}
-				}
+				b.log(ctx, "schedule clean task: "+doErr.Error(), logger)
 			} else {
 				b.cleanScheduler.StartBlocking()
 			}
 		} else {
-			logger.Println(err)
+			b.log(ctx, "schedule clean task: "+err.Error(), logger)
 		}
 
 	}()
 
 }
 
-func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger, sendLogs bool) {
+func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 	dutyTask := func() {
 
-		ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
-		room := b.Conf.Rooms[ind]
+		if !b.accepted && !b.skipped {
+			ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
+			room := b.Conf.Rooms[ind]
 
-		// TODO: dynamically retrieve chat id by name
-		resp, err := b.NotifyAboutDuty(ctx, 2, &room)
-		if err != nil {
-			logger.Println(err)
-
-			if sendLogs {
-				_, logErr := b.sendLog(ctx, "notify about duty: "+err.Error())
-				if logErr != nil {
-					logger.Println(logErr) // todo: log to file
-				}
+			// TODO: dynamically retrieve chat id by name
+			resp, err := b.NotifyAboutDuty(ctx, 1, &room)
+			if err != nil {
+				b.log(ctx, "schedule duty task (notifyAboutDuty): "+err.Error(), logger)
 			}
-		}
 
-		buf, err := io.ReadAll(resp.Body)
-		if err != nil {
-			logger.Println(err)
+			buf, err := io.ReadAll(resp.Body)
+			if err != nil {
+				logger.Println(err)
+			}
+			fmt.Println(stringutils.PrettyString(string(buf)))
 		}
-		fmt.Println(stringutils.PrettyString(string(buf)))
 
 		// update current room and queue
-		b.updateQueue(ind)
+		updateErr := b.updateQueue()
+		if updateErr != nil {
+			b.log(ctx, "schedule duty task (updateQueue): "+updateErr.Error(), logger)
+		}
 
 		// overwrite existing config
 		saveErr := b.saveConfig()
 		if saveErr != nil {
-			logger.Println(saveErr)
+			b.log(ctx, "schedule duty task (saveConfig): "+saveErr.Error(), logger)
 		}
 	}
 
@@ -594,34 +638,42 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger, s
 
 		timings, err := stringutils.TimingsToGMTString(b.Conf.Timings)
 		if err != nil {
-			// todo: send me log messages in vk direct?
-			logger.Println(err)
+			b.log(ctx, "schedule duty task (TimingsToGMTString): "+err.Error(), logger)
 
 			// default timings if timings are not provided in conf file // todo: in .env? (12factor app)
-			timings = "10:30;22:30"
+			timings = "10:30;21:00"
 		}
 
 		_, err = b.dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Do(dutyTask)
 		if err != nil {
-			logger.Println(err)
+			b.log(ctx, "schedule duty task (Do): "+err.Error(), logger)
 		}
 
 		b.dutyScheduler.StartBlocking()
 	}()
 }
 
-// todo: call generic method StartTaskAsync(task func(), ctx ...)
 func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool) {
 
-	b.context = ctx // todo: pass context to bot's 'constructor'?
+	b.sendLogs = sendLogs
 
 	_, err := b.sendMessage(ctx, "Я включился!)", b.Conf.Dad, 0)
 	if err != nil {
 		logger.Println(err)
 	}
 
-	b.scheduleDutyTask(ctx, logger, sendLogs)
-	b.scheduleCleanDayTask(ctx, logger, sendLogs)
+	b.scheduleDutyTask(ctx, logger)
+	b.scheduleCleanDayTask(ctx, logger)
+
+	logger.Println("Bot successfully started")
+
+	//for {
+	//	select {
+	//	case <-ctx.Done():
+	//		println("INTERRUPTING START ASYNC")
+	//		return
+	//	}
+	//}
 
 	//ff := func() {
 	//
@@ -653,5 +705,4 @@ func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLog
 	//
 	//}()
 
-	logger.Println("Bot successfully started")
 }

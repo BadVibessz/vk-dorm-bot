@@ -70,18 +70,14 @@ func initVars(logger *log.Logger) {
 
 }
 
-func startBot(logger *log.Logger) {
-
-}
-
-func startServer(bot *app.App, logger *log.Logger) {
+func startServer(mainCtx context.Context, bot *app.App, logger *log.Logger) {
 
 	cb := callback.NewCallback()
 
-	cb.ConfirmationKey = "0d38468a"
+	cb.ConfirmationKey = "538d2804"
 
 	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
-		(*bot).HandleMessage(ctx, obj, logger)
+		(*bot).HandleMessage(mainCtx, obj, logger)
 	})
 
 	http.HandleFunc("/callback", cb.HandleFunc)
@@ -101,21 +97,38 @@ func main() {
 	loadEnv()
 	initVars(logger)
 
+	wg := sync.WaitGroup{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// todo: graceful shutdown
+	// listen to termination signal and exit gracefully
+	//go func() {
+	//	exit := make(chan os.Signal, 1)
+	//	signal.Notify(exit, os.Interrupt, syscall.SIGTERM) // todo: read more about signal.notify! https://pkg.go.dev/os/signal
+	//	<-exit
+	//
+	//	//ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	//	//defer cancel()
+	//	//
+	//
+	//	print("TERMINATING")
+	//	cancel()
+	//	return
+	//}()
+
 	bot, err := app.NewBot(&vk, configPath)
 	if err != nil {
 		apputils.HandleFatalError(err, logger)
 	}
-
-	wg := sync.WaitGroup{}
-	ctx := context.Background()
 
 	// start bot schedule
 	bot.StartAsync(ctx, logger, true)
 
 	// start server for events handling
 	wg.Add(1)
-	go startServer(&bot, logger)
+	go startServer(ctx, &bot, logger)
 
 	wg.Wait()
+	cancel()
 	println("App finished")
 }

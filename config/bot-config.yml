@@ -63,13 +63,15 @@ rooms:
       swap-pending: false
 timings:
     - "10:30"
-    - "22:30"
+    - "21:00"
 frequency: 2
-current: "391"
-
-clean-day: "saturday"
+current: "393"
+clean-day: saturday
 clean-hour: "21:00"
-
 retries: 3
 retry-interval: 1
 dad: 334808440
+admins:
+    - 334808440
+    - 160875598
+    - 361384685
