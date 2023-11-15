@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	vkapi "github.com/BadVibessz/vk-api"
 	"github.com/SevereCloud/vksdk/v2/callback"
 	"github.com/SevereCloud/vksdk/v2/events"
 	"github.com/joho/godotenv"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"vk-bot/internal/app"
 	apputils "vk-bot/pkg/utils/app"
 )
@@ -70,12 +74,15 @@ func initVars(logger *log.Logger) {
 
 }
 
-func startServer(mainCtx context.Context, bot *app.App, logger *log.Logger) {
+func startServerAsync(mainCtx context.Context, bot *app.App, logger *log.Logger) {
+
+	httpServer := &http.Server{
+		Addr: ":" + strconv.Itoa(port),
+	}
 
 	cb := callback.NewCallback()
 
 	cb.ConfirmationKey = "538d2804"
-
 	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
 		(*bot).HandleMessage(mainCtx, obj, logger)
 	})
@@ -84,9 +91,21 @@ func startServer(mainCtx context.Context, bot *app.App, logger *log.Logger) {
 
 	logger.Println("Server started at port:" + strconv.Itoa(port))
 
-	err := http.ListenAndServe(":"+strconv.Itoa(port), nil)
-	if err != nil {
-		apputils.HandleFatalError(err, logger)
+	eg, gCtx := errgroup.WithContext(mainCtx)
+
+	// start server
+	eg.Go(func() error {
+		return httpServer.ListenAndServe()
+	})
+
+	// listen for ctx cancellation
+	eg.Go(func() error {
+		<-gCtx.Done()
+		return httpServer.Shutdown(context.Background())
+	})
+
+	if err := eg.Wait(); err != nil {
+		fmt.Printf("exit reason: %s \n", err)
 	}
 }
 
@@ -102,19 +121,19 @@ func main() {
 
 	// todo: graceful shutdown
 	// listen to termination signal and exit gracefully
-	//go func() {
-	//	exit := make(chan os.Signal, 1)
-	//	signal.Notify(exit, os.Interrupt, syscall.SIGTERM) // todo: read more about signal.notify! https://pkg.go.dev/os/signal
-	//	<-exit
-	//
-	//	//ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	//	//defer cancel()
-	//	//
-	//
-	//	print("TERMINATING")
-	//	cancel()
-	//	return
-	//}()
+	go func() {
+		exit := make(chan os.Signal, 1)
+		signal.Notify(exit, os.Interrupt, syscall.SIGTERM) // todo: read more about signal.notify! https://pkg.go.dev/os/signal
+		<-exit
+
+		//ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		//defer cancel()
+		//
+
+		print("\nTERMINATING")
+		cancel()
+		return
+	}()
 
 	bot, err := app.NewBot(&vk, configPath)
 	if err != nil {
@@ -122,11 +141,11 @@ func main() {
 	}
 
 	// start bot schedule
-	bot.StartAsync(ctx, logger, true)
+	go bot.StartAsync(ctx, logger, true)
 
 	// start server for events handling
 	wg.Add(1)
-	go startServer(ctx, &bot, logger)
+	startServerAsync(ctx, &bot, logger)
 
 	wg.Wait()
 	cancel()

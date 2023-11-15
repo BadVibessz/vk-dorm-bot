@@ -63,7 +63,7 @@ rooms:
       swap-pending: false
 timings:
     - "10:30"
-    - "21:00"
+    - "21:30"
 frequency: 2
 current: "393"
 clean-day: saturday
