@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -361,6 +362,8 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 	case "/skip":
 
+		// todo:
+
 	}
 
 }
@@ -587,7 +590,16 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 			if doErr != nil {
 				b.log(ctx, "schedule clean task: "+doErr.Error(), logger)
 			} else {
-				b.cleanScheduler.StartBlocking()
+				b.cleanScheduler.StartAsync()
+
+				// listen for ctx cancellation
+				for {
+					select {
+					case <-ctx.Done():
+						logger.Println("\nshuttding down clean day scheduler")
+						return
+					}
+				}
 			}
 		} else {
 			b.log(ctx, "schedule clean task: "+err.Error(), logger)
@@ -644,12 +656,22 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 			timings = "10:30;21:00"
 		}
 
-		_, err = b.dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Do(dutyTask)
+		_, err = b.dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Tag("duty").Do(dutyTask)
 		if err != nil {
 			b.log(ctx, "schedule duty task (Do): "+err.Error(), logger)
 		}
 
-		b.dutyScheduler.StartBlocking()
+		b.dutyScheduler.StartAsync()
+
+		// listen for ctx cancellation
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Println("shuttding down duty scheduler")
+				return
+			}
+		}
+
 	}()
 }
 
@@ -667,42 +689,29 @@ func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLog
 
 	logger.Println("Bot successfully started")
 
-	//for {
-	//	select {
-	//	case <-ctx.Done():
-	//		println("INTERRUPTING START ASYNC")
-	//		return
-	//	}
-	//}
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Println("shuttding down schedulers")
 
-	//ff := func() {
-	//
-	//	msg := "\nмбепнники: "
-	//
-	//	ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
-	//	room := b.Conf.Rooms[ind]
-	//
-	//	msg += room.Number + "\n"
-	//	for _, member := range room.Members {
-	//		msg += "*" + member.Id + "(" + member.Name + ")\n"
-	//	}
-	//
-	//	fmt.Println(msg)
-	//
-	//	// update current room and queue
-	//	b.updateQueue(ind, logger)
-	//}
-	//
-	//wg.Add(1)
-	//go func() {
-	//	defer wg.Done()
-	//
-	//	_, err := dutyScheduler.Every(3).Seconds().WaitForSchedule().Do(ff)
-	//	if err != nil {
-	//		logger.Println(err)
-	//	}
-	//	dutyScheduler.StartBlocking()
-	//
-	//}()
+			// there's no reason for graceful shutdown because it's meaningless to wait for all the jobs to stop.
 
+			b.dutyScheduler.Stop()
+			removeErr := b.dutyScheduler.RemoveByTag("duty")
+			if removeErr != nil {
+				return
+			}
+
+			b.cleanScheduler.Stop()
+			removeErr = b.cleanScheduler.RemoveByTag("cleanday")
+			if removeErr != nil {
+				return // todo:
+			}
+
+			// todo: remove and understand why not all goroutines returns by ctx.cancel capturing
+			time.Sleep(1 * time.Second) // wait for server.shutdown
+			os.Exit(1)
+			return
+		}
+	}
 }
