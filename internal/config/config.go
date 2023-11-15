@@ -27,6 +27,7 @@ type Config struct {
 	Retries       int8     `yaml:"retries"`
 	RetryInterval int8     `yaml:"retry-interval"`
 	Dad           int      `yaml:"dad"` // todo: overflow in 32bit systems?
+	Admins        []int    `yaml:"admins"`
 }
 
 func Load(path string) (*Config, error) {
