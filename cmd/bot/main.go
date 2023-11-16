@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	vkapi "github.com/BadVibessz/vk-api"
 	"github.com/SevereCloud/vksdk/v2/callback"
 	"github.com/SevereCloud/vksdk/v2/events"
 	"github.com/joho/godotenv"
 	"golang.org/x/sync/errgroup"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,23 +40,23 @@ func loadEnv() {
 	}
 }
 
-func initVars(logger *log.Logger) {
+func initVars() {
 
 	var exists bool
 
 	token, exists = os.LookupEnv("VK_API_TOKEN")
 	if !exists {
-		apputils.HandleFatalError(errors.New("VK_API_TOKEN not specified in env"), logger)
+		apputils.HandleFatalError(errors.New("VK_API_TOKEN not specified in env"))
 	}
 
 	endpoint, exists = os.LookupEnv("VK_ENDPOINT")
 	if !exists {
-		apputils.HandleFatalError(errors.New("VK_ENDPOINT not specified in env"), logger)
+		apputils.HandleFatalError(errors.New("VK_ENDPOINT not specified in env"))
 	}
 
 	version, exists = os.LookupEnv("VK_API_VERSION")
 	if !exists {
-		apputils.HandleFatalError(errors.New("VK_API_VERSION not specified in env"), logger)
+		apputils.HandleFatalError(errors.New("VK_API_VERSION not specified in env"))
 	}
 
 	h := http.Client{}
@@ -74,7 +74,7 @@ func initVars(logger *log.Logger) {
 
 }
 
-func startServerAsync(mainCtx context.Context, bot *app.App, logger *log.Logger) {
+func startServerAsync(mainCtx context.Context, bot *app.App) {
 
 	httpServer := &http.Server{
 		Addr: ":" + strconv.Itoa(port),
@@ -82,14 +82,14 @@ func startServerAsync(mainCtx context.Context, bot *app.App, logger *log.Logger)
 
 	cb := callback.NewCallback()
 
-	cb.ConfirmationKey = "538d2804"
+	cb.ConfirmationKey = "35fd19c2"
 	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
-		(*bot).HandleMessage(mainCtx, obj, logger)
+		(*bot).HandleMessage(mainCtx, obj)
 	})
 
 	http.HandleFunc("/callback", cb.HandleFunc)
 
-	logger.Println("Server started at port:" + strconv.Itoa(port))
+	slog.Info("Server started at port:" + strconv.Itoa(port))
 
 	eg, gCtx := errgroup.WithContext(mainCtx)
 
@@ -105,16 +105,14 @@ func startServerAsync(mainCtx context.Context, bot *app.App, logger *log.Logger)
 	})
 
 	if err := eg.Wait(); err != nil {
-		fmt.Printf("exit reason: %s \n", err)
+		slog.Info("exit reason: %s \n", err)
 	}
 }
 
 func main() {
 
-	logger := log.New(os.Stderr, "", 3)
-
 	loadEnv()
-	initVars(logger)
+	initVars()
 
 	wg := sync.WaitGroup{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,24 +128,27 @@ func main() {
 		//defer cancel()
 		//
 
-		print("\nTERMINATING")
+		slog.Info("TERMINATING")
 		cancel()
 		return
 	}()
 
 	bot, err := app.NewBot(&vk, configPath)
 	if err != nil {
-		apputils.HandleFatalError(err, logger)
+		apputils.HandleFatalError(err)
 	}
 
+	// todo: LOGGING LEVELS
+
 	// start bot schedule
-	go bot.StartAsync(ctx, logger, true)
+	go bot.StartAsync(ctx, true)
 
 	// start server for events handling
 	wg.Add(1)
-	startServerAsync(ctx, &bot, logger)
+	startServerAsync(ctx, &bot)
 
 	wg.Wait()
 	cancel()
-	println("App finished")
+
+	slog.Info("App finished")
 }

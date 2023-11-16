@@ -11,6 +11,7 @@ import (
 	"github.com/go-co-op/gocron"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -23,14 +24,14 @@ import (
 )
 
 type App interface {
-	NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error)
-	NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error)
+	NotifyAboutDuty(ctx context.Context, room *config.Room) (*http.Response, error)
+	NotifyAboutCleaning(ctx context.Context) (*http.Response, error)
 
-	SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error)
+	SendMessageToChat(ctx context.Context, msg string, randID int) (*http.Response, error)
 	SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error
 
-	StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool)
-	HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger)
+	StartAsync(ctx context.Context, sendLogs bool)
+	HandleMessage(ctx context.Context, obj events.MessageNewObject)
 
 	// general function for starting any task with any schedule?
 }
@@ -99,8 +100,8 @@ func (b *BotService) sendMessage(ctx context.Context, msg string, peerId, randID
 	return resp, nil
 }
 
-func (b *BotService) SendMessageToChat(ctx context.Context, msg string, chatID, randID int) (*http.Response, error) {
-	return b.sendMessage(ctx, msg, 2000000000+chatID, randID)
+func (b *BotService) SendMessageToChat(ctx context.Context, msg string, randID int) (*http.Response, error) {
+	return b.sendMessage(ctx, msg, 2000000000+b.Conf.ChatID, randID)
 }
 
 func (b *BotService) getQueueString() string {
@@ -127,63 +128,90 @@ func (b *BotService) getQueueString() string {
 	return res
 }
 
-func (b *BotService) log(ctx context.Context, msg string, logger *log.Logger) {
-	logger.Println(msg)
+func (b *BotService) log(ctx context.Context, msg string, level int) {
+
+	if level == 1 {
+		slog.Info(msg)
+	} else if level == 2 {
+		slog.Error(msg)
+	}
 
 	if b.sendLogs {
 		_, logErr := b.sendMessage(ctx, msg, b.Conf.Dad, 0)
 		if logErr != nil {
-			logger.Println(logErr)
+			slog.Error(logErr.Error())
 		}
 	}
 }
 
-func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObject, logger *log.Logger) {
+func (b *BotService) getGroup(id int) string {
+
+	if slices.IndexFunc(b.Conf.Admins, func(n int) bool { return n == id }) != -1 {
+		return "admin" // todo: enum?
+	}
+
+	return "unknown"
+}
+
+func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObject) {
 
 	msg := obj.Message.Text
 	from := obj.Message.FromID
 
-	// authenticate
-	if slices.IndexFunc(append(b.Conf.Admins, b.Conf.Dad), func(n int) bool { return n == from }) == -1 {
-		_, err := b.sendMessage(ctx, "У тебя нет прав, чтобы запрашивать данную команду.", from, 0)
+	logMsg := "new message from @id" + strconv.Itoa(from) + " with content: " + msg + "."
+	slog.Info(logMsg)
+
+	if from != b.Conf.Dad {
+		_, err := b.sendMessage(ctx, logMsg, b.Conf.Dad, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
-		return
 	}
+
+	group := b.getGroup(from)
 
 	log.Println(msg)
 
 	spltd := strings.Split(msg, " ")
 
+	authenticate := func() bool {
+		if group != "admin" {
+			_, err := b.sendMessage(ctx, "У тебя нет прав, чтобы запрашивать данную команду.", from, 0)
+			if err != nil {
+				slog.Error(err.Error())
+			}
+			return false
+		}
+		return true
+	}
+
 	switch spltd[0] {
 
-	case "/echo":
-		_, err := b.sendMessage(ctx, msg, from, 0)
-		if err != nil {
-			logger.Println(err)
-		}
-		break
-
-	// sort queue ascending
 	case "/reset":
+		if !authenticate() {
+			return
+		}
+
 		b.resetQueue()
 
 		_, err := b.sendMessage(ctx, "Порядок комнат восстановлен по умолчанию", from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		// overwrite existing config
 		saveErr := b.saveConfig()
 		if saveErr != nil {
-			logger.Println(saveErr)
+			slog.Error(err.Error())
 		}
 
 		break
 
 	// set current room
 	case "/setcurrent":
+		if !authenticate() {
+			return
+		}
 
 		// validate input
 		curr := spltd[1]
@@ -193,19 +221,19 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			resp := "Номер текущей комнаты успешно изменен" + "\n" + "Новый порядок:\n" + b.getQueueString()
 			_, err := b.sendMessage(ctx, resp, from, 0)
 			if err != nil {
-				logger.Println(err)
+				slog.Error(err.Error())
 			}
 
 			// overwrite existing config
 			saveErr := b.saveConfig()
 			if saveErr != nil {
-				logger.Println(saveErr)
+				slog.Error(err.Error())
 			}
 
 		} else {
 			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
 			if err != nil {
-				logger.Println(err)
+				slog.Error(err.Error())
 			}
 		}
 		break
@@ -213,33 +241,40 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 	case "/queue":
 		_, err := b.sendMessage(ctx, b.getQueueString(), from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 		break
 
 	case "/swap":
+		if !authenticate() {
+			return
+		}
+
 		err := b.SwapRooms(ctx, spltd[1], spltd[2])
 		if err != nil {
 			_, sendErr := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
 			if sendErr != nil {
-				logger.Println(sendErr)
+				slog.Error(sendErr.Error())
 			}
 		} else {
 			resp := "Сделано!" + "\n" + "Новый порядок:\n" + b.getQueueString()
-			_, err := b.sendMessage(ctx, resp, from, 0)
+			_, sendErr := b.sendMessage(ctx, resp, from, 0)
 			if err != nil {
-				logger.Println(err)
+				slog.Error(sendErr.Error())
 			}
 
 			// overwrite existing config
 			saveErr := b.saveConfig()
 			if saveErr != nil {
-				logger.Println(saveErr)
+				slog.Error(saveErr.Error())
 			}
 		}
 		break
 
 	case "/setfreq":
+		if !authenticate() {
+			return
+		}
 
 		if n, err := strconv.Atoi(spltd[1]); err == nil && n <= 7 && n > 0 {
 
@@ -247,7 +282,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 			err = b.saveConfig()
 			if err != nil {
-				logger.Println(err)
+				slog.Error(err.Error())
 			}
 		}
 
@@ -257,27 +292,36 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 		_, err := b.sendMessage(ctx, "День уборки: "+b.Conf.CleanDay, from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		break
 
 	case "/setcleanday":
+		if !authenticate() {
+			return
+		}
 
 		day := strings.ToLower(spltd[1])
 
 		_, err := stringutils.GetWeekday(day)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 			_, err = b.sendMessage(ctx, "Такого дня недели не существует", from, 0)
+			if err != nil {
+				slog.Error(err.Error())
+			}
 			return
 		}
 
 		// cancel scheduled task
 		err = b.cleanScheduler.RemoveByTag("cleanday")
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 			_, err = b.sendMessage(ctx, "Что-то пошло не так...", from, 0)
+			if err != nil {
+				slog.Error(err.Error())
+			}
 			return
 		}
 
@@ -285,17 +329,17 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		b.Conf.CleanDay = day
 
 		// restart task
-		b.scheduleCleanDayTask(ctx, logger)
+		b.scheduleCleanDayTask(ctx)
 
 		_, err = b.sendMessage(ctx, "День уборки успешно изменен на "+day, from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		// overwrite existing config
 		saveErr := b.saveConfig()
 		if saveErr != nil {
-			logger.Println(saveErr)
+			slog.Error(err.Error())
 		}
 
 		break
@@ -304,50 +348,60 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 		_, err := b.sendMessage(ctx, "Время уборки: "+b.Conf.CleanHour, from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		break
 
 	case "/setcleanhour":
+		if !authenticate() {
+			return
+		}
 
 		cleanTime := spltd[1]
 
 		err := stringutils.ValidateTime(cleanTime)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 			_, err = b.sendMessage(ctx, "Указано некорректное время", from, 0)
-			return
+			if err != nil {
+				slog.Error(err.Error())
+			}
 		}
 
 		// cancel scheduled task
 		err = b.cleanScheduler.RemoveByTag("cleanday")
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 			_, err = b.sendMessage(ctx, "Что-то пошло не так...", from, 0)
-			return
+			if err != nil {
+				slog.Error(err.Error())
+			}
 		}
 
 		// set clean day
 		b.Conf.CleanHour = cleanTime
 
 		// restart task
-		b.scheduleCleanDayTask(ctx, logger)
+		b.scheduleCleanDayTask(ctx)
 
 		_, err = b.sendMessage(ctx, "Время уборки успешно изменено на "+cleanTime, from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		// overwrite existing config
 		saveErr := b.saveConfig()
 		if saveErr != nil {
-			logger.Println(saveErr)
+			slog.Error(saveErr.Error())
 		}
 
 		break
 
 	case "/accepted":
+		if !authenticate() {
+			return
+		}
 
 		// if accepted -> current = current.next
 		b.accepted = true
@@ -355,15 +409,39 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		// send response to user
 		_, err := b.sendMessage(ctx, "Понял!\nСледующий раз напомню "+b.Conf.Rooms[b.getCurrentRoomIndex()+1].Number+" комнате.", from, 0)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 
 		break
 
 	case "/skip":
+		if !authenticate() {
+			return
+		}
 
-		// todo:
+		count, err := strconv.Atoi(spltd[0])
+		if err != nil {
+			_, sendErr := b.sendMessage(ctx, "Некорректный параметр", from, 0)
+			if sendErr != nil {
+				slog.Error(sendErr.Error())
+			}
+		}
 
+		b.skipped = true
+		b.skippedCount = count
+
+		_, err = b.sendMessage(ctx, "Понял!\nПропускаю напоминания "+strconv.Itoa(b.skippedCount)+" раз.", from, 0)
+		if err != nil {
+			slog.Error(err.Error())
+		}
+
+		break
+
+	default: // echo
+		_, err := b.sendMessage(ctx, msg, from, 0)
+		if err != nil {
+			slog.Error(err.Error())
+		}
 	}
 
 }
@@ -378,7 +456,7 @@ func (b *BotService) isSwapPending() bool {
 	return false
 }
 
-func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http.Response, error) {
+func (b *BotService) NotifyAboutCleaning(ctx context.Context) (*http.Response, error) {
 
 	err := stringutils.ValidateTime(b.Conf.CleanHour)
 	if err != nil {
@@ -386,7 +464,7 @@ func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http
 	}
 
 	msg := "@all\n" + "Напоминаю, сегодня проверка в " + b.Conf.CleanHour
-	resp, err := b.SendMessageToChat(ctx, msg, chatId, 0)
+	resp, err := b.SendMessageToChat(ctx, msg, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +472,7 @@ func (b *BotService) NotifyAboutCleaning(ctx context.Context, chatId int) (*http
 	return resp, nil
 }
 
-func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *config.Room) (*http.Response, error) {
+func (b *BotService) NotifyAboutDuty(ctx context.Context, room *config.Room) (*http.Response, error) {
 
 	// b.count++
 	// b.count %= len(b.Conf.Timings) // take mod of count to know if it's time to move to next room
@@ -405,7 +483,7 @@ func (b *BotService) NotifyAboutDuty(ctx context.Context, chatId int, room *conf
 	}
 
 	// TODO: dynamically retrieve chat id by name
-	resp, err := b.SendMessageToChat(ctx, msg, chatId, 0)
+	resp, err := b.SendMessageToChat(ctx, msg, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +576,7 @@ func (b *BotService) updateQueue() error {
 	}
 
 	nowHour, nowMin := time.Now().Hour(), time.Now().Minute()
-	spltd := strings.Split(b.Conf.Timings[len(b.Conf.Timings)-1], ":")
+	spltd := strings.Split(b.Conf.DutyTimings[len(b.Conf.DutyTimings)-1], ":")
 
 	lastHour, err := strconv.Atoi(spltd[0])
 	if err != nil {
@@ -541,17 +619,17 @@ func (b *BotService) printDutySchedule() {
 	}
 }
 
-func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logger) {
+func (b *BotService) scheduleCleanDayTask(ctx context.Context) {
 
 	cleanTask := func() {
-		resp, err := b.NotifyAboutCleaning(ctx, 1)
+		resp, err := b.NotifyAboutCleaning(ctx)
 		if err != nil {
-			b.log(ctx, "schedule clean task: "+err.Error(), logger)
+			b.log(ctx, "schedule clean task: "+err.Error(), 2)
 		}
 
 		buf, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logger.Println(err)
+			slog.Error(err.Error())
 		}
 		fmt.Println(stringutils.PrettyString(string(buf)))
 	}
@@ -565,30 +643,23 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 		weekday, err := stringutils.GetWeekday(b.Conf.CleanDay)
 		if err == nil {
 
-			cleanHour, parseErr := stringutils.MoscowTimeToGMT(b.Conf.CleanHour)
+			timings, parseErr := stringutils.TimingsToGMTString(b.Conf.CleanTimings)
 			if parseErr != nil {
-				b.log(ctx, "schedule clean task: "+parseErr.Error(), logger)
+				b.log(ctx, "schedule duty task (TimingsToGMTString): "+parseErr.Error(), 2)
+
+				// default timings if timings are not provided in conf file
+				timings = "11:00;18:00"
 			}
-
-			// todo: обработать случаи ведущих нулей (только зачем?, для красоты!)
-			spltd := strings.Split(cleanHour, ":")
-
-			h, strvErr := strconv.Atoi(spltd[0])
-			if strvErr != nil {
-				logger.Println(strvErr)
-			}
-
-			notifyTime := strconv.Itoa(h-3) + ":" + spltd[1]
 
 			_, doErr := b.cleanScheduler.Every(1).
 				Week().
 				Weekday(weekday).
-				At(notifyTime).
+				At(timings).
 				Tag("cleanday").
 				Do(cleanTask)
 
 			if doErr != nil {
-				b.log(ctx, "schedule clean task: "+doErr.Error(), logger)
+				b.log(ctx, "schedule clean task: "+doErr.Error(), 2)
 			} else {
 				b.cleanScheduler.StartAsync()
 
@@ -596,20 +667,20 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context, logger *log.Logge
 				for {
 					select {
 					case <-ctx.Done():
-						logger.Println("\nshuttding down clean day scheduler")
+						slog.Info("shutting down clean day scheduler")
 						return
 					}
 				}
 			}
 		} else {
-			b.log(ctx, "schedule clean task: "+err.Error(), logger)
+			b.log(ctx, "schedule clean task: "+err.Error(), 2)
 		}
 
 	}()
 
 }
 
-func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
+func (b *BotService) scheduleDutyTask(ctx context.Context) {
 	dutyTask := func() {
 
 		if !b.accepted && !b.skipped {
@@ -617,14 +688,14 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 			room := b.Conf.Rooms[ind]
 
 			// TODO: dynamically retrieve chat id by name
-			resp, err := b.NotifyAboutDuty(ctx, 1, &room)
+			resp, err := b.NotifyAboutDuty(ctx, &room)
 			if err != nil {
-				b.log(ctx, "schedule duty task (notifyAboutDuty): "+err.Error(), logger)
+				b.log(ctx, "schedule duty task (notifyAboutDuty): "+err.Error(), 2)
 			}
 
 			buf, err := io.ReadAll(resp.Body)
 			if err != nil {
-				logger.Println(err)
+				slog.Error(err.Error())
 			}
 			fmt.Println(stringutils.PrettyString(string(buf)))
 		}
@@ -632,13 +703,13 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 		// update current room and queue
 		updateErr := b.updateQueue()
 		if updateErr != nil {
-			b.log(ctx, "schedule duty task (updateQueue): "+updateErr.Error(), logger)
+			b.log(ctx, "schedule duty task (updateQueue): "+updateErr.Error(), 2)
 		}
 
 		// overwrite existing config
 		saveErr := b.saveConfig()
 		if saveErr != nil {
-			b.log(ctx, "schedule duty task (saveConfig): "+saveErr.Error(), logger)
+			b.log(ctx, "schedule duty task (saveConfig): "+saveErr.Error(), 2)
 		}
 	}
 
@@ -648,9 +719,9 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 	go func() {
 		defer b.wg.Done()
 
-		timings, err := stringutils.TimingsToGMTString(b.Conf.Timings)
+		timings, err := stringutils.TimingsToGMTString(b.Conf.DutyTimings)
 		if err != nil {
-			b.log(ctx, "schedule duty task (TimingsToGMTString): "+err.Error(), logger)
+			b.log(ctx, "schedule duty task (TimingsToGMTString): "+err.Error(), 2)
 
 			// default timings if timings are not provided in conf file // todo: in .env? (12factor app)
 			timings = "10:30;21:00"
@@ -658,7 +729,7 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 
 		_, err = b.dutyScheduler.Every(b.Conf.Frequency).Day().At(timings).Tag("duty").Do(dutyTask)
 		if err != nil {
-			b.log(ctx, "schedule duty task (Do): "+err.Error(), logger)
+			b.log(ctx, "schedule duty task (Do): "+err.Error(), 2)
 		}
 
 		b.dutyScheduler.StartAsync()
@@ -667,7 +738,7 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 		for {
 			select {
 			case <-ctx.Done():
-				logger.Println("shuttding down duty scheduler")
+				slog.Info("shutting down duty scheduler")
 				return
 			}
 		}
@@ -675,24 +746,26 @@ func (b *BotService) scheduleDutyTask(ctx context.Context, logger *log.Logger) {
 	}()
 }
 
-func (b *BotService) StartAsync(ctx context.Context, logger *log.Logger, sendLogs bool) {
+func (b *BotService) StartAsync(ctx context.Context, sendLogs bool) {
 
 	b.sendLogs = sendLogs
 
+	// todo: validate config!
+
 	_, err := b.sendMessage(ctx, "Я включился!)", b.Conf.Dad, 0)
 	if err != nil {
-		logger.Println(err)
+		slog.Error(err.Error())
 	}
 
-	b.scheduleDutyTask(ctx, logger)
-	b.scheduleCleanDayTask(ctx, logger)
+	b.scheduleDutyTask(ctx)
+	b.scheduleCleanDayTask(ctx)
 
-	logger.Println("Bot successfully started")
+	slog.Info("Bot successfully started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Println("shuttding down schedulers")
+			slog.Info("shutting down schedulers")
 
 			// there's no reason for graceful shutdown because it's meaningless to wait for all the jobs to stop.
 

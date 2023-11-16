@@ -1,11 +1,11 @@
 package app
 
 import (
-	"log"
+	"log/slog"
 	"os"
 )
 
-func HandleFatalError(err error, logger *log.Logger) {
-	logger.Println(err)
+func HandleFatalError(err error) {
+	slog.Error(err.Error())
 	os.Exit(1)
 }

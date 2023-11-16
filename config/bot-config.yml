@@ -1,3 +1,4 @@
+chat-id: 2
 rooms:
     - number: "391"
       members:
@@ -61,9 +62,12 @@ rooms:
         - name: Лилия
           id: li.sing
       swap-pending: false
-timings:
+duty-timings:
     - "10:30"
     - "21:30"
+clean-timings:
+    - "11:00"
+    - "18:00"
 frequency: 2
 current: "393"
 clean-day: saturday

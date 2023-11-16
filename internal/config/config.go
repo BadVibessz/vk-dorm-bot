@@ -18,8 +18,10 @@ type Room struct {
 }
 
 type Config struct {
+	ChatID        int      `yaml:"chat-id"`
 	Rooms         []Room   `yaml:"rooms"`
-	Timings       []string `yaml:"timings"`
+	DutyTimings   []string `yaml:"duty-timings"`
+	CleanTimings  []string `yaml:"clean-timings"`
 	Frequency     int      `yaml:"frequency"`
 	Current       string   `yaml:"current"`
 	CleanDay      string   `yaml:"clean-day"`
