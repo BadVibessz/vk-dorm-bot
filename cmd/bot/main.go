@@ -82,7 +82,7 @@ func startServerAsync(mainCtx context.Context, bot *app.App) {
 
 	cb := callback.NewCallback()
 
-	cb.ConfirmationKey = "35fd19c2"
+	cb.ConfirmationKey = "ccfdcf70"
 	cb.MessageNew(func(ctx context.Context, obj events.MessageNewObject) {
 		(*bot).HandleMessage(mainCtx, obj)
 	})

@@ -36,6 +36,10 @@ type App interface {
 	// general function for starting any task with any schedule?
 }
 
+const (
+	groupPeerId = 2000000000
+)
+
 type BotService struct {
 	ConfigPath string
 	Conf       *config.Config
@@ -101,7 +105,7 @@ func (b *BotService) sendMessage(ctx context.Context, msg string, peerId, randID
 }
 
 func (b *BotService) SendMessageToChat(ctx context.Context, msg string, randID int) (*http.Response, error) {
-	return b.sendMessage(ctx, msg, 2000000000+b.Conf.ChatID, randID)
+	return b.sendMessage(ctx, msg, groupPeerId+b.Conf.ChatID, randID)
 }
 
 func (b *BotService) getQueueString() string {
@@ -144,7 +148,7 @@ func (b *BotService) log(ctx context.Context, msg string, level int) {
 	}
 }
 
-func (b *BotService) getGroup(id int) string {
+func (b *BotService) getUserGroup(id int) string {
 
 	if slices.IndexFunc(b.Conf.Admins, func(n int) bool { return n == id }) != -1 {
 		return "admin" // todo: enum?
@@ -158,6 +162,11 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 	msg := obj.Message.Text
 	from := obj.Message.FromID
 
+	// if message from chat -> do not handle
+	if obj.Message.PeerID > groupPeerId {
+		return
+	}
+
 	logMsg := "new message from @id" + strconv.Itoa(from) + " with content: " + msg + "."
 	slog.Info(logMsg)
 
@@ -168,7 +177,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 	}
 
-	group := b.getGroup(from)
+	group := b.getUserGroup(from)
 
 	log.Println(msg)
 
