@@ -138,8 +138,6 @@ func main() {
 		apputils.HandleFatalError(err)
 	}
 
-	// todo: LOGGING LEVELS
-
 	// start bot schedule
 	go bot.StartAsync(ctx, true)
 

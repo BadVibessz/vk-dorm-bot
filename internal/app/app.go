@@ -28,7 +28,6 @@ type App interface {
 	NotifyAboutCleaning(ctx context.Context) (*http.Response, error)
 
 	SendMessageToChat(ctx context.Context, msg string, randID int) (*http.Response, error)
-	SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error
 
 	StartAsync(ctx context.Context, sendLogs bool)
 	HandleMessage(ctx context.Context, obj events.MessageNewObject)
@@ -42,7 +41,9 @@ const (
 
 type BotService struct {
 	ConfigPath string
-	Conf       *config.Config
+
+	confMutex sync.RWMutex
+	Conf      *config.Config
 
 	wg *sync.WaitGroup
 
@@ -110,6 +111,9 @@ func (b *BotService) SendMessageToChat(ctx context.Context, msg string, randID i
 
 func (b *BotService) getQueueString() string {
 
+	b.confMutex.RLock()
+	defer b.confMutex.RUnlock()
+
 	var res string
 	for i, v := range b.Conf.Rooms {
 
@@ -149,11 +153,9 @@ func (b *BotService) log(ctx context.Context, msg string, level int) {
 }
 
 func (b *BotService) getUserGroup(id int) string {
-
 	if slices.IndexFunc(b.Conf.Admins, func(n int) bool { return n == id }) != -1 {
-		return "admin" // todo: enum?
+		return "admin"
 	}
-
 	return "unknown"
 }
 
@@ -161,6 +163,8 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 	msg := obj.Message.Text
 	from := obj.Message.FromID
+
+	isSaveNeeded := false
 
 	// if message from chat -> do not handle
 	if obj.Message.PeerID > groupPeerId {
@@ -202,17 +206,12 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 
 		b.resetQueue()
-
 		_, err := b.sendMessage(ctx, "Порядок комнат восстановлен по умолчанию", from, 0)
 		if err != nil {
 			slog.Error(err.Error())
 		}
 
-		// overwrite existing config
-		saveErr := b.saveConfig()
-		if saveErr != nil {
-			slog.Error(err.Error())
-		}
+		isSaveNeeded = true
 
 		break
 
@@ -225,19 +224,20 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		// validate input
 		curr := spltd[1]
 		if slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == curr }) != -1 {
-			b.Conf.Current = curr
 
+			b.confMutex.Lock()
+
+			b.Conf.Current = curr
 			resp := "Номер текущей комнаты успешно изменен" + "\n" + "Новый порядок:\n" + b.getQueueString()
+
+			b.confMutex.Unlock()
+
 			_, err := b.sendMessage(ctx, resp, from, 0)
 			if err != nil {
 				slog.Error(err.Error())
 			}
 
-			// overwrite existing config
-			saveErr := b.saveConfig()
-			if saveErr != nil {
-				slog.Error(err.Error())
-			}
+			isSaveNeeded = true
 
 		} else {
 			_, err := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
@@ -248,6 +248,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		break
 
 	case "/queue":
+		// getQueueString() locks and unlocks mutex by itself
 		_, err := b.sendMessage(ctx, b.getQueueString(), from, 0)
 		if err != nil {
 			slog.Error(err.Error())
@@ -259,7 +260,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			return
 		}
 
-		err := b.SwapRooms(ctx, spltd[1], spltd[2])
+		err := b.swapRooms(spltd[1], spltd[2])
 		if err != nil {
 			_, sendErr := b.sendMessage(ctx, "Некорректный номер комнаты", from, 0)
 			if sendErr != nil {
@@ -272,11 +273,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 				slog.Error(sendErr.Error())
 			}
 
-			// overwrite existing config
-			saveErr := b.saveConfig()
-			if saveErr != nil {
-				slog.Error(saveErr.Error())
-			}
+			isSaveNeeded = true
 		}
 		break
 
@@ -287,19 +284,22 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 
 		if n, err := strconv.Atoi(spltd[1]); err == nil && n <= 7 && n > 0 {
 
+			b.confMutex.Lock()
 			b.Conf.Frequency = n
+			b.confMutex.Unlock()
 
-			err = b.saveConfig()
-			if err != nil {
-				slog.Error(err.Error())
-			}
+			isSaveNeeded = true
 		}
 
 		break
 
 	case "/getcleanday":
 
-		_, err := b.sendMessage(ctx, "День уборки: "+b.Conf.CleanDay, from, 0)
+		b.confMutex.RLock()
+		cleanDay := b.Conf.CleanDay
+		b.confMutex.RUnlock()
+
+		_, err := b.sendMessage(ctx, "День уборки: "+cleanDay, from, 0)
 		if err != nil {
 			slog.Error(err.Error())
 		}
@@ -335,7 +335,9 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 
 		// set clean day
+		b.confMutex.Lock()
 		b.Conf.CleanDay = day
+		b.confMutex.Unlock()
 
 		// restart task
 		b.scheduleCleanDayTask(ctx)
@@ -345,17 +347,17 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			slog.Error(err.Error())
 		}
 
-		// overwrite existing config
-		saveErr := b.saveConfig()
-		if saveErr != nil {
-			slog.Error(err.Error())
-		}
+		isSaveNeeded = true
 
 		break
 
 	case "/getcleanhour":
 
-		_, err := b.sendMessage(ctx, "Время уборки: "+b.Conf.CleanHour, from, 0)
+		b.confMutex.RLock()
+		cleanHour := b.Conf.CleanHour
+		b.confMutex.RUnlock()
+
+		_, err := b.sendMessage(ctx, "Время уборки: "+cleanHour, from, 0)
 		if err != nil {
 			slog.Error(err.Error())
 		}
@@ -389,7 +391,9 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		}
 
 		// set clean day
+		b.confMutex.Lock()
 		b.Conf.CleanHour = cleanTime
+		b.confMutex.Unlock()
 
 		// restart task
 		b.scheduleCleanDayTask(ctx)
@@ -399,12 +403,7 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			slog.Error(err.Error())
 		}
 
-		// overwrite existing config
-		saveErr := b.saveConfig()
-		if saveErr != nil {
-			slog.Error(saveErr.Error())
-		}
-
+		isSaveNeeded = true
 		break
 
 	case "/accepted":
@@ -412,11 +411,16 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			return
 		}
 
+		b.confMutex.Lock()
+
 		// if accepted -> current = current.next
 		b.accepted = true
+		roomNumber := b.Conf.Rooms[b.getCurrentRoomIndex()+1].Number
+
+		b.confMutex.Unlock()
 
 		// send response to user
-		_, err := b.sendMessage(ctx, "Понял!\nСледующий раз напомню "+b.Conf.Rooms[b.getCurrentRoomIndex()+1].Number+" комнате.", from, 0)
+		_, err := b.sendMessage(ctx, "Понял!\nСледующий раз напомню "+roomNumber+" комнате.", from, 0)
 		if err != nil {
 			slog.Error(err.Error())
 		}
@@ -436,10 +440,14 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 			}
 		}
 
+		b.confMutex.Lock()
+
 		b.skipped = true
 		b.skippedCount = count
 
-		_, err = b.sendMessage(ctx, "Понял!\nПропускаю напоминания "+strconv.Itoa(b.skippedCount)+" раз.", from, 0)
+		b.confMutex.Unlock()
+
+		_, err = b.sendMessage(ctx, "Понял!\nПропускаю напоминания "+strconv.Itoa(count)+" раз.", from, 0)
 		if err != nil {
 			slog.Error(err.Error())
 		}
@@ -450,6 +458,14 @@ func (b *BotService) HandleMessage(ctx context.Context, obj events.MessageNewObj
 		_, err := b.sendMessage(ctx, msg, from, 0)
 		if err != nil {
 			slog.Error(err.Error())
+		}
+	}
+
+	// overwrite existing config
+	if isSaveNeeded {
+		saveErr := b.saveConfig()
+		if saveErr != nil {
+			slog.Error(saveErr.Error())
 		}
 	}
 
@@ -483,15 +499,11 @@ func (b *BotService) NotifyAboutCleaning(ctx context.Context) (*http.Response, e
 
 func (b *BotService) NotifyAboutDuty(ctx context.Context, room *config.Room) (*http.Response, error) {
 
-	// b.count++
-	// b.count %= len(b.Conf.Timings) // take mod of count to know if it's time to move to next room
-
 	msg := "Дежурные: " + room.Number + "\n"
 	for _, member := range room.Members {
 		msg += "*" + member.Id + "(" + member.Name + ")\n"
 	}
 
-	// TODO: dynamically retrieve chat id by name
 	resp, err := b.SendMessageToChat(ctx, msg, 0)
 	if err != nil {
 		return nil, err
@@ -503,13 +515,12 @@ func (b *BotService) NotifyAboutDuty(ctx context.Context, room *config.Room) (*h
 func (b *BotService) StartScheduledTaskAsync(task func()) { // todo: code generation?
 }
 
-func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 string) error {
+func (b *BotService) swapRooms(roomName1 string, roomName2 string) error {
+
+	b.confMutex.Lock()
+	defer b.confMutex.Unlock()
 
 	b.swapped = true
-
-	m := sync.Mutex{} // todo: where to define mutex? is mutex necessarily here?
-
-	m.Lock()
 
 	ind1 := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == roomName1 })
 	ind2 := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == roomName2 })
@@ -528,7 +539,6 @@ func (b *BotService) SwapRooms(ctx context.Context, roomName1 string, roomName2 
 	newQueue[ind2].SwapPending = true
 
 	b.Conf.Rooms = newQueue
-	m.Unlock()
 
 	// if we swapped current room -> necessarily to overwrite schedule
 	if ind1 == currInd {
@@ -555,6 +565,9 @@ func (b *BotService) saveConfig() error {
 }
 
 func (b *BotService) resetQueue() {
+
+	b.confMutex.Lock()
+	defer b.confMutex.Unlock()
 
 	for _, v := range b.Conf.Rooms {
 		v.SwapPending = false
@@ -597,7 +610,7 @@ func (b *BotService) updateQueue() error {
 		return err
 	}
 
-	// move to the next room // todo: test
+	// move to the next room
 	if (nowHour > lastHour) || (nowHour == lastHour && nowMin >= lastMin) {
 		nextInd := (currentInd + 1) % len(b.Conf.Rooms)
 		b.Conf.Current = b.Conf.Rooms[nextInd].Number
@@ -691,7 +704,6 @@ func (b *BotService) scheduleCleanDayTask(ctx context.Context) {
 
 func (b *BotService) scheduleDutyTask(ctx context.Context) {
 	dutyTask := func() {
-
 		if !b.accepted && !b.skipped {
 			ind := slices.IndexFunc(b.Conf.Rooms, func(r config.Room) bool { return r.Number == b.Conf.Current })
 			room := b.Conf.Rooms[ind]
@@ -781,16 +793,16 @@ func (b *BotService) StartAsync(ctx context.Context, sendLogs bool) {
 			b.dutyScheduler.Stop()
 			removeErr := b.dutyScheduler.RemoveByTag("duty")
 			if removeErr != nil {
-				return
+				slog.Error(removeErr.Error())
 			}
 
 			b.cleanScheduler.Stop()
 			removeErr = b.cleanScheduler.RemoveByTag("cleanday")
 			if removeErr != nil {
-				return // todo:
+				slog.Error(removeErr.Error())
 			}
 
-			// todo: remove and understand why not all goroutines returns by ctx.cancel capturing
+			// todo: wait for server shutdown by chan
 			time.Sleep(1 * time.Second) // wait for server.shutdown
 			os.Exit(1)
 			return
