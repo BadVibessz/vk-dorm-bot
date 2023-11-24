@@ -69,8 +69,8 @@ clean-timings:
     - "11:00"
     - "18:00"
 frequency: 2
-current: "393"
-clean-day: saturday
+current: "397"
+clean-day: thursday
 clean-hour: "21:00"
 retries: 3
 retry-interval: 1

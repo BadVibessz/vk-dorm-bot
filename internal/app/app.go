@@ -29,7 +29,7 @@ type App interface {
 
 	SendMessageToChat(ctx context.Context, msg string, randID int) (*http.Response, error)
 
-	StartAsync(ctx context.Context, sendLogs bool)
+	StartAsync(ctx context.Context, sendLogs bool, servChan chan any)
 	HandleMessage(ctx context.Context, obj events.MessageNewObject)
 
 	// general function for starting any task with any schedule?
@@ -744,7 +744,7 @@ func (b *BotService) scheduleDutyTask(ctx context.Context) {
 		if err != nil {
 			b.log(ctx, "schedule duty task (TimingsToGMTString): "+err.Error(), 2)
 
-			// default timings if timings are not provided in conf file // todo: in .env? (12factor app)
+			// default timings if timings are not provided in conf file
 			timings = "10:30;21:00"
 		}
 
@@ -767,15 +767,17 @@ func (b *BotService) scheduleDutyTask(ctx context.Context) {
 	}()
 }
 
-func (b *BotService) StartAsync(ctx context.Context, sendLogs bool) {
+func (b *BotService) StartAsync(ctx context.Context, sendLogs bool, servChan chan any) {
 
 	b.sendLogs = sendLogs
-
-	// todo: validate config!
 
 	_, err := b.sendMessage(ctx, "Я включился!)", b.Conf.Dad, 0)
 	if err != nil {
 		slog.Error(err.Error())
+	}
+
+	if validErr := b.Conf.Validate(); validErr != nil {
+		b.log(ctx, validErr.Error(), 2)
 	}
 
 	b.scheduleDutyTask(ctx)
@@ -789,7 +791,6 @@ func (b *BotService) StartAsync(ctx context.Context, sendLogs bool) {
 			slog.Info("shutting down schedulers")
 
 			// there's no reason for graceful shutdown because it's meaningless to wait for all the jobs to stop.
-
 			b.dutyScheduler.Stop()
 			removeErr := b.dutyScheduler.RemoveByTag("duty")
 			if removeErr != nil {
@@ -802,10 +803,9 @@ func (b *BotService) StartAsync(ctx context.Context, sendLogs bool) {
 				slog.Error(removeErr.Error())
 			}
 
-			// todo: wait for server shutdown by chan
-			time.Sleep(1 * time.Second) // wait for server.shutdown
+			// wait for server.shutdown
+			<-servChan
 			os.Exit(1)
-			return
 		}
 	}
 }

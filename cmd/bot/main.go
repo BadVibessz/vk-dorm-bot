@@ -74,7 +74,7 @@ func initVars() {
 
 }
 
-func startServerAsync(mainCtx context.Context, bot *app.App) {
+func startServerAsync(mainCtx context.Context, bot *app.App, servChan chan any) {
 
 	httpServer := &http.Server{
 		Addr: ":" + strconv.Itoa(port),
@@ -107,7 +107,12 @@ func startServerAsync(mainCtx context.Context, bot *app.App) {
 	if err := eg.Wait(); err != nil {
 		slog.Info("exit reason: %s \n", err)
 	}
+
+	// notify that server closed
+	servChan <- "done"
 }
+
+// todo: 12factor app
 
 func main() {
 
@@ -117,11 +122,13 @@ func main() {
 	wg := sync.WaitGroup{}
 	ctx, cancel := context.WithCancel(context.Background())
 
+	servChan := make(chan any, 1)
+
 	// todo: graceful shutdown
 	// listen to termination signal and exit gracefully
 	go func() {
 		exit := make(chan os.Signal, 1)
-		signal.Notify(exit, os.Interrupt, syscall.SIGTERM) // todo: read more about signal.notify! https://pkg.go.dev/os/signal
+		signal.Notify(exit, os.Interrupt, syscall.SIGTERM) // https://pkg.go.dev/os/signal
 		<-exit
 
 		//ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -139,11 +146,11 @@ func main() {
 	}
 
 	// start bot schedule
-	go bot.StartAsync(ctx, true)
+	go bot.StartAsync(ctx, true, servChan)
 
 	// start server for events handling
 	wg.Add(1)
-	startServerAsync(ctx, &bot)
+	startServerAsync(ctx, &bot, servChan)
 
 	wg.Wait()
 	cancel()
